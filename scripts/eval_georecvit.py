@@ -34,6 +34,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rounds_list", type=int, nargs="+", default=[1, 2, 3])
     p.add_argument("--windows_list", type=int, nargs="+", default=[1, 3, 5, 9])
     p.add_argument("--no_dinov3", action="store_true")
+    p.add_argument("--bidir_sat_recursion", action="store_true")
+    p.add_argument("--dinov3_split_layer", type=int, default=18)
     p.add_argument("--detr_every_round", action="store_true")
     p.add_argument("--class_chunk_size", type=int, default=2)
     p.add_argument("--max_val_samples", type=int, default=-1)
@@ -79,6 +81,8 @@ def main() -> None:
         DINOv3Expert(
             model_path=args.dinov3_dir,
             input_size=int(ds_cfg.get("dinov3_resolution", 512)),
+            split_layer_idx=int(args.dinov3_split_layer),
+            use_grad_checkpoint=False,
             dtype=amp_dtype if use_amp else torch.float32,
         )
         if use_dinov3
@@ -97,6 +101,7 @@ def main() -> None:
         use_dinov3=use_dinov3,
         use_inner_link=True,
         use_feedback_loop=(max(args.rounds_list) > 1),
+        bidir_sat_recursion=bool(args.bidir_sat_recursion),
     )
     model = GeoRecViT(sam3_wrapper, dinov3, model_cfg).to(device)
     load_georecvit_links(model, args.links_ckpt, strict=False)

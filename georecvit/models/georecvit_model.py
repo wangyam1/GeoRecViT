@@ -47,6 +47,7 @@ class GeoRecViTConfig:
     use_dinov3: bool = True
     use_inner_link: bool = True
     use_feedback_loop: bool = True
+    bidir_sat_recursion: bool = False
     anchor_perturb_prob: float = 0.0
 
 
@@ -412,8 +413,45 @@ class GeoRecViT(nn.Module):
             else None
         )
 
+        # 7. Bidirectional Multi-Agent Communication Links (A -> B, B -> B, and recursive B -> A delta)
+        # Re-enters frozen DINOv3-SAT late layers [18:24] inside uncertain windows so BOTH
+        # SAM 3 (Expert A) and DINOv3-SAT (Expert B) communicate bidirectionally across rounds!
+        use_bidir = bool(config.bidir_sat_recursion and config.use_dinov3 and config.use_feedback_loop)
+        if use_bidir:
+            self.pe_to_sat_outer_link = SpatialOuterLink(
+                in_dim=config.pe_dim,
+                out_dim=config.sat_dim,
+                hidden_mult=0.5,
+                use_spatial_dwconv=True,
+                zero_init_gate=False,
+                init_gate_value=0.2,
+            )
+            self.sat_feedback_link = FeedbackEncoderLink(
+                num_classes=config.num_classes,
+                context_dim=config.decoder_dim,
+                out_dim=config.sat_dim,
+            )
+            self.sat_inner_link = SpatialInnerLink(
+                hidden_size=config.sat_dim,
+                bottleneck_ratio=0.5,
+                init_scale=0.1,
+            )
+            self.sat_to_pe_delta_link = SpatialOuterLink(
+                in_dim=config.sat_dim,
+                out_dim=config.pe_dim,
+                hidden_mult=0.5,
+                use_spatial_dwconv=False,
+                zero_init_gate=False,
+                init_gate_value=0.25,
+            )
+        else:
+            self.pe_to_sat_outer_link = None
+            self.sat_feedback_link = None
+            self.sat_inner_link = None
+            self.sat_to_pe_delta_link = None
+
     def trainable_modules(self) -> Dict[str, nn.Module]:
-        """Return dict of ONLY the lightweight trainable modules (~10M params)."""
+        """Return dict of ONLY the lightweight trainable modules (~11-16M params)."""
         mods: Dict[str, nn.Module] = {
             "router": self.router,
             "readout": self.readout,
@@ -426,6 +464,14 @@ class GeoRecViT(nn.Module):
             mods["inner_link"] = self.inner_link
         if self.sparse_refiner is not None:
             mods["sparse_refiner"] = self.sparse_refiner
+        if self.pe_to_sat_outer_link is not None:
+            mods["pe_to_sat_outer_link"] = self.pe_to_sat_outer_link
+        if self.sat_feedback_link is not None:
+            mods["sat_feedback_link"] = self.sat_feedback_link
+        if self.sat_inner_link is not None:
+            mods["sat_inner_link"] = self.sat_inner_link
+        if self.sat_to_pe_delta_link is not None:
+            mods["sat_to_pe_delta_link"] = self.sat_to_pe_delta_link
         return mods
 
     def trainable_parameters(self) -> List[nn.Parameter]:
@@ -538,11 +584,24 @@ class GeoRecViT(nn.Module):
 
         # Step 0 (Cached ONCE per image): frozen PE-ViT early trunk + frozen DINOv3-SAT + text prompts
         f_pe_mid = self.sam3_wrapper.forward_early_vit(images_01)  # [B, 72, 72, 1024]
-        f_sat = (
-            self.dinov3_expert(images_01).to(dtype=f_pe_mid.dtype)
-            if self.dinov3_expert is not None
-            else None
+        use_bidir = (
+            self.pe_to_sat_outer_link is not None
+            and self.dinov3_expert is not None
+            and R > 1
+            and hasattr(self.dinov3_expert, "forward_early")
         )
+        sat_early = None
+        if self.dinov3_expert is not None:
+            if use_bidir:
+                sat_early = self.dinov3_expert.forward_early(images_01)
+                with torch.no_grad():
+                    f_sat = self.dinov3_expert.forward_late(sat_early).to(dtype=f_pe_mid.dtype)
+            else:
+                f_sat = self.dinov3_expert(images_01).to(dtype=f_pe_mid.dtype)
+        else:
+            f_sat = None
+        cur_sat = f_sat
+        cur_sat_delta: Optional[torch.Tensor] = None
         text_out = self.sam3_wrapper.encode_class_prompts(class_prompts, device=device)
         class_prototypes = text_out["class_prototypes"]
 
@@ -619,11 +678,62 @@ class GeoRecViT(nn.Module):
                 routing = self.router(
                     probs=prev_probs,
                     pe_feats=prev_pre_global,
-                    sat_feats=f_sat,
+                    sat_feats=cur_sat,
                     top_m_override=top_m_windows,
                 )
                 routing_history.append(routing)
                 active_ratios.append(routing.active_ratio)
+
+                # Bidirectional Step 1 (A -> B + B -> B): SAM 3 geometry & critic state enter
+                # frozen DINOv3-SAT late blocks [18:24] to refine high-rank satellite features!
+                if (
+                    use_bidir
+                    and sat_early is not None
+                    and self.pe_to_sat_outer_link is not None
+                    and self.sat_feedback_link is not None
+                    and self.sat_inner_link is not None
+                    and self.sat_to_pe_delta_link is not None
+                    and cur_sat is not None
+                ):
+                    a2b_72 = self.pe_to_sat_outer_link(prev_pre_global, apply_gate=True)
+                    b2b_72 = self.sat_feedback_link(
+                        probs=prev_probs,
+                        entropy=routing.entropy_map,
+                        disagreement=routing.disagreement_map,
+                        decoder_context=prev_decode.decoder_context,
+                        round_idx=r,
+                    )
+                    sat_msg_72 = (a2b_72 + b2b_72) * routing.active_mask
+                    sat_msg_lo = F.interpolate(
+                        sat_msg_72.permute(0, 3, 1, 2).float(),
+                        size=(sat_early.h_p, sat_early.w_p),
+                        mode="bilinear",
+                        align_corners=False,
+                    ).permute(0, 2, 3, 1)
+                    mask_lo = F.interpolate(
+                        routing.active_mask.permute(0, 3, 1, 2).float(),
+                        size=(sat_early.h_p, sat_early.w_p),
+                        mode="bilinear",
+                        align_corners=False,
+                    ).permute(0, 2, 3, 1)
+                    base_sat_mid = sat_early.spatial_mid.float()
+                    aligned_sat_delta = (
+                        self.sat_inner_link(base_sat_mid + sat_msg_lo) - base_sat_mid
+                    ) * mask_lo
+                    cur_sat_delta = (
+                        aligned_sat_delta
+                        if cur_sat_delta is None
+                        else (cur_sat_delta + aligned_sat_delta)
+                    )
+                    new_sat = self.dinov3_expert.forward_late(
+                        sat_early, spatial_delta=cur_sat_delta
+                    ).to(dtype=f_pe_mid.dtype)
+                    delta_sat = new_sat - cur_sat
+                    cur_sat = new_sat
+                    # Bidirectional Step 2 (B -> A recursive return): feed refined satellite
+                    # differential back into SAM 3's active uncertain windows!
+                    b2a_delta = self.sat_to_pe_delta_link(delta_sat, apply_gate=True)
+                    cur_mid = cur_mid + b2a_delta * routing.active_mask
 
                 if self.feedback_outer_link is not None:
                     fb_tokens = self.feedback_outer_link(
@@ -738,7 +848,7 @@ class GeoRecViT(nn.Module):
                     active_mask_grid=routing.active_mask,
                     class_prototypes=class_prototypes,
                     round_idx=r,
-                    f_sat=f_sat,
+                    f_sat=cur_sat,
                 )
                 H_hi, W_hi = decode_out.fpn_feats[0].shape[-2:]
                 active_masks_hi.append(

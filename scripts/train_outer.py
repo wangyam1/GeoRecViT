@@ -50,6 +50,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num_rounds", type=int, default=None)
     p.add_argument("--top_m_windows", type=int, default=None)
     p.add_argument("--no_dinov3", action="store_true")
+    p.add_argument("--bidir_sat_recursion", action="store_true", help="Enable full bidirectional A<->B recursion re-entering frozen DINOv3-SAT late layers")
+    p.add_argument("--dinov3_split_layer", type=int, default=18, help="Split layer index for DINOv3 late recursion (out of 24)")
     p.add_argument("--no_detr", action="store_true")
     p.add_argument("--detr_every_round", action="store_true", help="Run full SAM 3 DETR on every round (slower)")
     p.add_argument("--no_inner_link", action="store_true")
@@ -193,6 +195,8 @@ def main() -> None:
         DINOv3Expert(
             model_path=args.dinov3_dir,
             input_size=int(ds_cfg.get("dinov3_resolution", 512)),
+            split_layer_idx=int(args.dinov3_split_layer),
+            use_grad_checkpoint=True,
             dtype=amp_dtype if use_amp else torch.float32,
         )
         if use_dinov3
@@ -212,6 +216,7 @@ def main() -> None:
         use_dinov3=use_dinov3,
         use_inner_link=(not args.no_inner_link) and bool(m_cfg.get("use_inner_link", True)),
         use_feedback_loop=(num_rounds > 1) and bool(m_cfg.get("use_feedback_loop", True)),
+        bidir_sat_recursion=bool(args.bidir_sat_recursion),
         anchor_perturb_prob=float(args.anchor_perturb_prob),
     )
     model = GeoRecViT(sam3_wrapper, dinov3, model_cfg).to(device)

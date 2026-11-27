@@ -23,6 +23,7 @@ import torch.nn.functional as F
 from georecvit.data.rs_datasets import normalize_mask_array
 from georecvit.losses import MultiRoundSegmentationLoss
 from georecvit.models import DINOv3OnlySegmenter, GeoRecViT, GeoRecViTConfig, UncertaintyWindowRouter
+from georecvit.models.dinov3_expert import DINOv3EarlyOutput
 from georecvit.models.sam3_wrapper import LateViTOutput, SAM3DecodeOutput
 from georecvit.models.uncertainty_router import gather_selected_windows, scatter_selected_windows
 from georecvit.utils import (
@@ -125,19 +126,50 @@ class _MockSAM3Wrapper(nn.Module):
 
 
 class _MockDINOv3Expert(nn.Module):
-    def __init__(self, sat_dim: int = 64, grid: int = 12) -> None:
+    def __init__(self, sat_dim: int = 64, grid: int = 12, patch_grid: int = 6) -> None:
         super().__init__()
         self.embed_dim = sat_dim
         self.grid = grid
-        self.proj = nn.Conv2d(3, sat_dim, kernel_size=1)
+        self.patch_grid = patch_grid
+        self.early_proj = nn.Conv2d(3, sat_dim, kernel_size=1)
+        self.late_block = _MockWindowBlock(sat_dim, 0)
         for p in self.parameters():
             p.requires_grad = False
         self.eval()
 
     @torch.no_grad()
+    def forward_early(self, images_01: torch.Tensor) -> DINOv3EarlyOutput:
+        x = F.interpolate(images_01, size=(self.patch_grid, self.patch_grid), mode="bilinear", align_corners=False)
+        spatial = self.early_proj(x).permute(0, 2, 3, 1).contiguous()
+        prefix = torch.zeros(images_01.shape[0], 5, self.embed_dim, device=images_01.device)
+        return DINOv3EarlyOutput(
+            prefix_tokens=prefix,
+            spatial_mid=spatial,
+            position_embeddings=None,
+            h_p=self.patch_grid,
+            w_p=self.patch_grid,
+        )
+
+    def forward_late(
+        self,
+        early_out: DINOv3EarlyOutput,
+        spatial_delta: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        spatial = early_out.spatial_mid
+        if spatial_delta is not None:
+            spatial = spatial + spatial_delta.to(spatial.dtype)
+        out = self.late_block(spatial)
+        feat_map = F.interpolate(
+            out.permute(0, 3, 1, 2).float(),
+            size=(self.grid, self.grid),
+            mode="bilinear",
+            align_corners=False,
+        )
+        return feat_map.permute(0, 2, 3, 1).contiguous()
+
+    @torch.no_grad()
     def forward(self, images_01: torch.Tensor) -> torch.Tensor:
-        x = F.interpolate(images_01, size=(self.grid, self.grid), mode="bilinear", align_corners=False)
-        return self.proj(x).permute(0, 2, 3, 1).contiguous()
+        return self.forward_late(self.forward_early(images_01))
 
 
 def test_sparse_window_gather_scatter_exact() -> None:
@@ -316,17 +348,95 @@ def test_georecvit_inner_and_outer_end_to_end(tmp_path: Path) -> None:
     assert norm_1idx.tolist() == [[255, 0, 6], [1, 2, 255]]
 
 
-def test_dinov3_only_segmenter() -> None:
+def test_dinov3_only_and_b2b_self_recursion() -> None:
     torch.manual_seed(7)
-    dino = _MockDINOv3Expert(sat_dim=64, grid=12)
-    seg = DINOv3OnlySegmenter(dino, num_classes=8, hidden_dim=32, out_size=24)
-    seg.train()
+    dino = _MockDINOv3Expert(sat_dim=64, grid=12, patch_grid=6)
     imgs = torch.rand(2, 3, 24, 24)
     masks = torch.randint(0, 8, (2, 24, 24))
-    out = seg(imgs)
-    assert out["final_logits"].shape == (2, 8, 24, 24)
-    crit = MultiRoundSegmentationLoss(ignore_index=255, non_last_loss_weight=0.0, active_refine_weight=0.0)
-    loss = crit(out["round_logits"], masks)["loss"]
-    loss.backward()
-    assert any(p.grad is not None and p.grad.abs().sum().item() > 0 for p in seg.trainable_parameters())
+
+    # 1. Single-pass B only (R=1)
+    seg_r1 = DINOv3OnlySegmenter(dino, num_classes=8, hidden_dim=32, out_size=24, num_rounds=1)
+    seg_r1.train()
+    out1 = seg_r1(imgs)
+    assert out1["final_logits"].shape == (2, 8, 24, 24)
+    crit1 = MultiRoundSegmentationLoss(ignore_index=255, non_last_loss_weight=0.0, active_refine_weight=0.0)
+    crit1(out1["round_logits"], masks)["loss"].backward()
+    assert any(p.grad is not None and p.grad.abs().sum().item() > 0 for p in seg_r1.trainable_parameters())
     assert all(p.grad is None for p in dino.parameters())
+
+    # 2. Homogeneous B <-> B self-recursion (R=3, frozen Round-1 anchor + SAD)
+    seg_b2b = DINOv3OnlySegmenter(
+        dino, num_classes=8, hidden_dim=32, out_size=24,
+        num_rounds=3, window_size=4, top_m_windows=3, anchor_perturb_prob=1.0,
+    )
+    seg_b2b.freeze_round1_anchor()
+    seg_b2b.train()
+    out3 = seg_b2b(imgs, num_rounds=3, top_m_windows=3)
+    assert len(out3["round_logits"]) == 3
+    crit3 = MultiRoundSegmentationLoss(ignore_index=255, active_refine_weight=1.5, skip_round1_loss=True)
+    crit3(out3["round_logits"], masks, active_masks_hi=out3["active_masks_hi"])["loss"].backward()
+    for mod_name in ("router", "sat_feedback_link", "sat_inner_link", "sparse_refiner"):
+        mod = getattr(seg_b2b, mod_name)
+        assert any(p.grad is not None and p.grad.abs().sum().item() > 0 for p in mod.parameters()), (
+            f"B<->B module {mod_name} received no grad!"
+        )
+    assert all(p.grad is None for p in dino.parameters())
+    assert all(p.grad is None for p in seg_b2b.cls_head.parameters())
+
+
+def test_georecvit_bidirectional_a2b_recursion() -> None:
+    torch.manual_seed(11)
+    sam3 = _MockSAM3Wrapper(pe_dim=64, d_model=32, grid=12, window_size=4)
+    dino = _MockDINOv3Expert(sat_dim=64, grid=12, patch_grid=6)
+    cfg = GeoRecViTConfig(
+        num_classes=7,
+        pe_dim=64,
+        sat_dim=64,
+        decoder_dim=32,
+        window_size=4,
+        num_recursive_rounds=3,
+        sparse_top_windows=3,
+        bidir_sat_recursion=True,
+        anchor_perturb_prob=0.5,
+    )
+    model = GeoRecViT(sam3, dino, cfg)
+    model.freeze_round1_anchor()
+    model.train()
+
+    imgs = torch.rand(2, 3, 24, 24)
+    masks = torch.randint(0, 7, (2, 24, 24))
+    prompts = [f"class_{i}" for i in range(7)]
+    out = model(imgs, class_prompts=prompts, num_rounds=3, top_m_windows=3)
+    assert len(out["round_logits"]) == 3
+
+    crit = MultiRoundSegmentationLoss(ignore_index=255, active_refine_weight=1.5, skip_round1_loss=True)
+    crit(out["round_logits"], masks, active_masks_hi=out["active_masks_hi"])["loss"].backward()
+
+    # Every single bidirectional link (A->B, B->B, Inner_B, B->A delta, A->A, router, refiner) gets grads!
+    for mod_name in (
+        "pe_to_sat_outer_link",
+        "sat_feedback_link",
+        "sat_inner_link",
+        "sat_to_pe_delta_link",
+        "feedback_outer_link",
+        "router",
+        "sparse_refiner",
+    ):
+        mod = getattr(model, mod_name)
+        assert any(p.grad is not None and p.grad.abs().sum().item() > 0 for p in mod.parameters()), (
+            f"Bidirectional module {mod_name} received no grad!"
+        )
+    # Round-1 anchor & both frozen foundation backbones stay strictly untouched!
+    assert all(p.grad is None for p in sam3.parameters())
+    assert all(p.grad is None for p in dino.parameters())
+    for frozen_name in ("sat_outer_link", "inner_link", "readout"):
+        assert all(p.grad is None for p in getattr(model, frozen_name).parameters())
+
+    # Eval invariance: exact 0.0 drift outside active windows
+    model.eval()
+    with torch.no_grad():
+        ev = model(imgs, class_prompts=prompts, num_rounds=3, top_m_windows=3)
+    diff = (ev["round_logits"][1] - ev["round_logits"][0]).abs()
+    act = ev["active_masks_hi"][0]
+    assert diff[act.expand_as(diff) < 0.5].max().item() < 1e-6
+    assert diff[act.expand_as(diff) > 0.5].max().item() > 1e-5
