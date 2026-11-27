@@ -1,0 +1,46 @@
+{
+  "dataset": "openearthmap",
+  "num_val_images": 100,
+  "label_offset": 1,
+  "avg_latency_ms": 1854.76,
+  "class_prompts": [
+    "bareland and bare soil",
+    "rangeland, grass and meadow",
+    "developed space, pavement and parking lot",
+    "road and street",
+    "tree and forest canopy",
+    "water, river and lake",
+    "agricultural farmland and cropland",
+    "building and rooftop"
+  ],
+  "sam3_semantic_only": {
+    "mIoU": 21.54,
+    "mF1": 31.98,
+    "OA": 25.9,
+    "per_class_IoU": {
+      "bareland": 1.51,
+      "rangeland": 7.53,
+      "developed_space": 6.07,
+      "road": 37.84,
+      "tree": 22.22,
+      "water": 59.23,
+      "agriculture_land": 9.81,
+      "building": 28.13
+    }
+  },
+  "sam3_dual_head": {
+    "mIoU": 27.67,
+    "mF1": 38.94,
+    "OA": 38.93,
+    "per_class_IoU": {
+      "bareland": 2.19,
+      "rangeland": 17.92,
+      "developed_space": 3.98,
+      "road": 36.28,
+      "tree": 29.35,
+      "water": 64.62,
+      "agriculture_land": 11.5,
+      "building": 55.52
+    }
+  }
+}
