@@ -33,6 +33,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sam3_ckpt", type=str, required=True)
     p.add_argument("--dinov3_dir", type=str, default="")
     p.add_argument("--inner_ckpt", type=str, default="", help="Optional Stage 1 inner warm-start .pt")
+    p.add_argument("--anchor_ckpt", type=str, default="", help="Optional Stage 2a single-pass anchor .pt")
+    p.add_argument("--freeze_round1_anchor", action="store_true", help="Stage 2b: freeze Round-1 anchor and train ONLY closed-loop recursion triad")
+    p.add_argument("--weight_decay", type=float, default=None)
+    p.add_argument("--active_refine_weight", type=float, default=0.5)
     p.add_argument("--cache_dir", type=str, default="/content/georecvit_cache/datasets")
     p.add_argument("--save_dir", type=str, default="/content/georecvit_cache/checkpoints/outer")
     p.add_argument("--num_rounds", type=int, default=None)
@@ -198,6 +202,12 @@ def main() -> None:
     if args.inner_ckpt:
         loaded = load_georecvit_links(model, args.inner_ckpt, strict=False)
         print(f"[outer] Loaded inner warm-start from {args.inner_ckpt}: {list(loaded.keys())}", flush=True)
+    if args.anchor_ckpt:
+        loaded = load_georecvit_links(model, args.anchor_ckpt, strict=False)
+        print(f"[outer] Loaded Stage 2a anchor from {args.anchor_ckpt}: {list(loaded.keys())}", flush=True)
+    if args.freeze_round1_anchor:
+        model.freeze_round1_anchor()
+        print("[outer] Froze Round-1 anchor (sat_outer_link, inner_link, readout) for Stage 2b recursion!", flush=True)
 
     print(f"[outer] Model config: {model_cfg}", flush=True)
     print(f"[outer] Params: {model.count_parameters()}", flush=True)
@@ -219,10 +229,12 @@ def main() -> None:
         ce_weight=float(t_cfg.get("ce_weight", 1.0)),
         dice_weight=float(t_cfg.get("dice_weight", 1.0)),
         focal_weight=float(t_cfg.get("focal_weight", 0.5)),
+        active_refine_weight=float(args.active_refine_weight),
     )
     params = model.trainable_parameters()
+    wd = args.weight_decay if args.weight_decay is not None else float(t_cfg.get("weight_decay", 0.01))
     optimizer = torch.optim.AdamW(
-        params, lr=lr, weight_decay=float(t_cfg.get("weight_decay", 0.01)), betas=(0.9, 0.95)
+        params, lr=lr, weight_decay=wd, betas=(0.9, 0.95)
     )
     total_opt_steps = max(1, (epochs * len(train_loader)) // grad_accum)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_opt_steps)

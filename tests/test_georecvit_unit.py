@@ -238,6 +238,24 @@ def test_georecvit_inner_and_outer_end_to_end(tmp_path: Path) -> None:
     out_ev = GeoRecViT(sam3, dino, cfg_every)(imgs, class_prompts=prompts, num_rounds=2, top_m_windows=3)
     assert len(out_ev["round_logits"]) == 2
 
+    # 2c. Verify Stage 2b decoupled mode (frozen Round-1 anchor -> gradients ONLY in recursion triad)
+    model_2b = GeoRecViT(sam3, dino, cfg)
+    model_2b.freeze_round1_anchor()
+    model_2b.train()
+    out_2b = model_2b(imgs, class_prompts=prompts, num_rounds=3, top_m_windows=3)
+    assert not out_2b["round_logits"][0].requires_grad
+    assert out_2b["round_logits"][1].requires_grad and out_2b["round_logits"][2].requires_grad
+    loss_2b = criterion(out_2b["round_logits"], masks, active_masks_hi=out_2b["active_masks_hi"])
+    loss_2b["loss"].backward()
+    for frozen_name in ("sat_outer_link", "inner_link", "readout"):
+        mod = getattr(model_2b, frozen_name)
+        assert all(p.grad is None for p in mod.parameters()), f"{frozen_name} should stay frozen!"
+    for active_name in ("router", "feedback_outer_link", "sparse_refiner"):
+        mod = getattr(model_2b, active_name)
+        assert any(p.grad is not None and p.grad.abs().sum().item() > 0 for p in mod.parameters()), (
+            f"Stage 2b module {active_name} received no grad!"
+        )
+
     # 3. Verify lightweight checkpoint save & reload
     ckpt = save_georecvit_links(model, tmp_path, tag="test")
     loaded = load_georecvit_links(model, ckpt, strict=True)

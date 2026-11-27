@@ -156,20 +156,22 @@ class SparseResidualRefinementHead(nn.Module):
             nn.Conv2d(in_ch, fpn_dim, kernel_size=1, bias=False),
             nn.GroupNorm(8, fpn_dim),
             nn.GELU(),
+            nn.Dropout2d(0.15),
             nn.Conv2d(fpn_dim, fpn_dim, kernel_size=3, padding=1, bias=False),
             nn.GroupNorm(8, fpn_dim),
             nn.GELU(),
-            nn.Conv2d(fpn_dim, fpn_dim, kernel_size=3, padding=1, bias=False),
+            nn.Conv2d(fpn_dim, fpn_dim, kernel_size=3, padding=2, dilation=2, bias=False),
             nn.GroupNorm(8, fpn_dim),
             nn.GELU(),
         )
         self.delta_proto_proj = nn.Conv2d(fpn_dim, proto_dim, kernel_size=1)
         self.delta_cls = nn.Conv2d(fpn_dim, num_classes, kernel_size=1)
-        # Small non-zero init on output convs + round scale avoids zero-gradient saddle points
-        nn.init.normal_(self.delta_cls.weight, std=0.01)
+        # Near-zero non-singular init: preserves exact Round-1 anchor at step 0 while
+        # keeping non-zero gradients flowing into refiner, feedback_outer_link, and STE router.
+        nn.init.normal_(self.delta_cls.weight, std=0.005)
         nn.init.zeros_(self.delta_cls.bias)
-        self.proto_weight = nn.Parameter(torch.tensor(2.0))
-        self.round_scales = nn.Parameter(torch.full((max_rounds,), 0.25))
+        self.proto_weight = nn.Parameter(torch.tensor(0.05))
+        self.round_scales = nn.Parameter(torch.full((max_rounds,), 0.1))
 
     def forward(
         self,
@@ -313,12 +315,30 @@ class GeoRecViT(nn.Module):
             "frozen_params": total - trainable,
         }
 
+    def freeze_round1_anchor(self) -> None:
+        """Freeze Round-1 anchor modules (`sat_outer_link`, `inner_link`, `readout`) for Stage 2b.
+
+        Guarantees zero gradient interference with the calibrated single-pass Baseline 2
+        anchor while dedicating 100% of Stage 2b optimization to the closed-loop recursion
+        triad (`feedback_outer_link`, `router`, `sparse_refiner`).
+        """
+        for mod in (self.sat_outer_link, self.inner_link, self.readout):
+            if mod is not None:
+                mod.eval()
+                for p in mod.parameters():
+                    p.requires_grad = False
+        self._round1_anchor_frozen = True
+
     def train(self, mode: bool = True) -> "GeoRecViT":
         super().train(mode)
         # Enforce frozen eval mode on both foundation experts
         self.sam3_wrapper.eval()
         if self.dinov3_expert is not None:
             self.dinov3_expert.eval()
+        if getattr(self, "_round1_anchor_frozen", False):
+            for mod in (self.sat_outer_link, self.inner_link, self.readout):
+                if mod is not None:
+                    mod.eval()
         return self
 
     def forward_inner_alignment(
@@ -399,12 +419,22 @@ class GeoRecViT(nn.Module):
         class_prototypes = text_out["class_prototypes"]
 
         # Inject heterogeneous satellite structural features via OuterLink
-        sat_delta = (
-            self.sat_outer_link(f_sat, apply_gate=True)
-            if (self.sat_outer_link is not None and f_sat is not None)
-            else None
-        )
-        base_mid = f_pe_mid if sat_delta is None else (f_pe_mid + sat_delta)
+        r1_frozen = bool(getattr(self, "_round1_anchor_frozen", False))
+        if r1_frozen:
+            with torch.no_grad():
+                sat_delta = (
+                    self.sat_outer_link(f_sat, apply_gate=True)
+                    if (self.sat_outer_link is not None and f_sat is not None)
+                    else None
+                )
+                base_mid = f_pe_mid if sat_delta is None else (f_pe_mid + sat_delta)
+        else:
+            sat_delta = (
+                self.sat_outer_link(f_sat, apply_gate=True)
+                if (self.sat_outer_link is not None and f_sat is not None)
+                else None
+            )
+            base_mid = f_pe_mid if sat_delta is None else (f_pe_mid + sat_delta)
         cur_mid = base_mid
 
         round_logits: List[torch.Tensor] = []
@@ -424,8 +454,15 @@ class GeoRecViT(nn.Module):
 
         for r in range(R):
             if r == 0:
-                x_in = self.inner_link(cur_mid) if self.inner_link is not None else cur_mid
-                late_out = self.sam3_wrapper.forward_late_vit(x_in)
+                if r1_frozen:
+                    with torch.no_grad():
+                        x_in = self.inner_link(cur_mid) if self.inner_link is not None else cur_mid
+                        late_out = self.sam3_wrapper.forward_late_vit(x_in)
+                        fpn_feats, fpn_pos = self.sam3_wrapper.forward_neck(late_out.vit_out)
+                else:
+                    x_in = self.inner_link(cur_mid) if self.inner_link is not None else cur_mid
+                    late_out = self.sam3_wrapper.forward_late_vit(x_in)
+                    fpn_feats, fpn_pos = self.sam3_wrapper.forward_neck(late_out.vit_out)
                 active_ratios.append(1.0)
             else:
                 assert prev_probs is not None and prev_decode is not None
@@ -455,9 +492,9 @@ class GeoRecViT(nn.Module):
                     selected_indices=routing.selected_indices,
                     prev_pre_global=prev_pre_global,
                 )
+                fpn_feats, fpn_pos = self.sam3_wrapper.forward_neck(late_out.vit_out)
 
             prev_pre_global = late_out.pre_global
-            fpn_feats, fpn_pos = self.sam3_wrapper.forward_neck(late_out.vit_out)
 
             # Fast asymmetric closed-loop: run full SAM 3 DETR on Round 1 to obtain open-vocab
             # semantic/instance/presence priors; in Rounds r >= 2 reuse cached DETR priors while
@@ -502,21 +539,38 @@ class GeoRecViT(nn.Module):
             if r == 0:
                 sam3_raw_logits = decode_out.sem_logits.detach()
                 H_hi, W_hi = decode_out.fpn_feats[0].shape[-2:]
-                if f_sat is not None:
-                    sat_proj = self.readout.sat_to_fpn(f_sat.permute(0, 3, 1, 2).contiguous())
-                    cached_sat_up = F.interpolate(
-                        sat_proj, size=(H_hi, W_hi), mode="bilinear", align_corners=False
-                    )
+                if r1_frozen:
+                    with torch.no_grad():
+                        if f_sat is not None:
+                            sat_proj = self.readout.sat_to_fpn(f_sat.permute(0, 3, 1, 2).contiguous())
+                            cached_sat_up = F.interpolate(
+                                sat_proj, size=(H_hi, W_hi), mode="bilinear", align_corners=False
+                            )
+                        else:
+                            cached_sat_up = torch.zeros_like(decode_out.fpn_feats[0])
+                        logits_r = self.readout(
+                            sam3_sem_logits=decode_out.sem_logits,
+                            sam3_inst_probs=decode_out.inst_probs,
+                            fpn_high=decode_out.fpn_feats[0],
+                            sat_feats_grid=f_sat,
+                            class_prototypes=class_prototypes,
+                        )
                 else:
-                    cached_sat_up = torch.zeros_like(decode_out.fpn_feats[0])
+                    if f_sat is not None:
+                        sat_proj = self.readout.sat_to_fpn(f_sat.permute(0, 3, 1, 2).contiguous())
+                        cached_sat_up = F.interpolate(
+                            sat_proj, size=(H_hi, W_hi), mode="bilinear", align_corners=False
+                        )
+                    else:
+                        cached_sat_up = torch.zeros_like(decode_out.fpn_feats[0])
 
-                logits_r = self.readout(
-                    sam3_sem_logits=decode_out.sem_logits,
-                    sam3_inst_probs=decode_out.inst_probs,
-                    fpn_high=decode_out.fpn_feats[0],
-                    sat_feats_grid=f_sat,
-                    class_prototypes=class_prototypes,
-                )
+                    logits_r = self.readout(
+                        sam3_sem_logits=decode_out.sem_logits,
+                        sam3_inst_probs=decode_out.inst_probs,
+                        fpn_high=decode_out.fpn_feats[0],
+                        sat_feats_grid=f_sat,
+                        class_prototypes=class_prototypes,
+                    )
             elif self.sparse_refiner is not None and routing is not None:
                 assert prev_logits is not None and prev_fpn_high is not None and prev_probs is not None
                 assert cached_sat_up is not None
