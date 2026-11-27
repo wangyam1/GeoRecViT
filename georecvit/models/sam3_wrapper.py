@@ -152,7 +152,18 @@ class SAM3RecursiveBackbone(nn.Module):
             if cached["language_features"].device == device:
                 return cached
 
-        text_out = self.sam3.backbone.forward_text(list(class_prompts), device=device)
+        # Ensure autocast matches any fp16/bf16 weights in language_backbone even outside autocast
+        lang_dtype = next(
+            (
+                p.dtype
+                for p in self.sam3.backbone.language_backbone.parameters()
+                if p.dtype in (torch.float16, torch.bfloat16)
+            ),
+            torch.float32,
+        )
+        use_lang_amp = device.type == "cuda" and lang_dtype in (torch.float16, torch.bfloat16)
+        with torch.amp.autocast(device_type=device.type, dtype=lang_dtype, enabled=use_lang_amp):
+            text_out = self.sam3.backbone.forward_text(list(class_prompts), device=device)
         # Also compute normalized pooled class prototypes [C, 256] for open-vocab readout
         lang_feat = text_out["language_features"]  # [L_txt, C, 256]
         lang_mask = text_out["language_mask"]      # [C, L_txt] (True = padding)
