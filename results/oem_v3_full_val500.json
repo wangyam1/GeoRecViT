@@ -1,0 +1,67 @@
+{
+  "dataset": "openearthmap",
+  "params": {
+    "total_params": 1154855262,
+    "trainable_params": 11215912,
+    "frozen_params": 1143639350
+  },
+  "sweeps": [
+    {
+      "top_m_windows": 3,
+      "active_window_ratio": 0.333,
+      "avg_latency_ms_at_max_R": 2359.12,
+      "by_round": {
+        "R=1": {
+          "mIoU": 59.83,
+          "mF1": 73.63,
+          "OA": 75.93,
+          "per_class_IoU": {
+            "bareland": 31.07,
+            "rangeland": 52.75,
+            "developed_space": 47.97,
+            "road": 52.08,
+            "tree": 67.84,
+            "water": 76.28,
+            "agriculture_land": 75.44,
+            "building": 75.24
+          }
+        },
+        "R=2": {
+          "mIoU": 59.9,
+          "mF1": 73.71,
+          "OA": 75.93,
+          "per_class_IoU": {
+            "bareland": 31.6,
+            "rangeland": 52.79,
+            "developed_space": 48.05,
+            "road": 51.97,
+            "tree": 67.81,
+            "water": 76.33,
+            "agriculture_land": 75.44,
+            "building": 75.24
+          }
+        },
+        "R=3": {
+          "mIoU": 59.94,
+          "mF1": 73.76,
+          "OA": 75.92,
+          "per_class_IoU": {
+            "bareland": 32.02,
+            "rangeland": 52.82,
+            "developed_space": 48.11,
+            "road": 51.8,
+            "tree": 67.78,
+            "water": 76.32,
+            "agriculture_land": 75.43,
+            "building": 75.23
+          }
+        }
+      },
+      "active_window_by_round_mIoU": {
+        "R=1": 55.1,
+        "R=2": 55.18,
+        "R=3": 55.17
+      }
+    }
+  ]
+}

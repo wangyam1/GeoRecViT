@@ -1,0 +1,94 @@
+[
+  {
+    "epoch": 1,
+    "train_loss": 1.7867,
+    "val_mIoU": 51.45,
+    "val_per_round_mIoU": [
+      51.45
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 1970.99,
+    "val_mF1": 64.22,
+    "val_OA": 71.91,
+    "per_class_IoU": {
+      "bareland": 0.41,
+      "rangeland": 51.78,
+      "developed_space": 41.9,
+      "road": 44.06,
+      "tree": 62.59,
+      "water": 65.72,
+      "agriculture_land": 72.41,
+      "building": 72.78
+    },
+    "elapsed_sec": 982.7
+  },
+  {
+    "epoch": 2,
+    "train_loss": 1.3654,
+    "val_mIoU": 58.45,
+    "val_per_round_mIoU": [
+      58.45
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 1964.8,
+    "val_mF1": 72.76,
+    "val_OA": 74.97,
+    "per_class_IoU": {
+      "bareland": 36.06,
+      "rangeland": 55.18,
+      "developed_space": 44.46,
+      "road": 47.62,
+      "tree": 64.12,
+      "water": 68.15,
+      "agriculture_land": 75.78,
+      "building": 76.2
+    },
+    "elapsed_sec": 1961.4
+  },
+  {
+    "epoch": 3,
+    "train_loss": 1.2408,
+    "val_mIoU": 60.75,
+    "val_per_round_mIoU": [
+      60.75
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 1968.16,
+    "val_mF1": 74.98,
+    "val_OA": 75.4,
+    "per_class_IoU": {
+      "bareland": 51.46,
+      "rangeland": 53.95,
+      "developed_space": 48.21,
+      "road": 47.12,
+      "tree": 64.84,
+      "water": 70.68,
+      "agriculture_land": 75.0,
+      "building": 74.72
+    },
+    "elapsed_sec": 2938.9
+  },
+  {
+    "epoch": 4,
+    "train_loss": 1.1664,
+    "val_mIoU": 62.02,
+    "val_per_round_mIoU": [
+      62.02
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 1968.21,
+    "val_mF1": 76.03,
+    "val_OA": 76.02,
+    "per_class_IoU": {
+      "bareland": 56.52,
+      "rangeland": 56.09,
+      "developed_space": 47.88,
+      "road": 48.61,
+      "tree": 64.93,
+      "water": 71.5,
+      "agriculture_land": 75.04,
+      "building": 75.64
+    },
+    "elapsed_sec": 3917.2
+  }
+]
