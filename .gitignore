@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Heavy artifacts (keep ONLY on Colab / Google Drive, never push to GitHub)
+data/
+datasets/
+weights/
+checkpoints/
+outputs/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.tar
+*.tar.gz
+*.zip
+*.tif
+*.tiff
+
+# Logs & local caches
+logs/
+wandb/
+runs/
+.DS_Store
+.env
+*.local

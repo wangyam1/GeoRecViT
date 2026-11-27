@@ -1,0 +1,68 @@
+# OpenEarthMap: Global High-Resolution 8-Class Land Cover Segmentation
+# Supervised SOTA: ~61-65% mIoU | SAM 3 OVSS (SegEarth-OV3): 42.9% mIoU
+dataset:
+  name: openearthmap
+  hf_repo: EVER-Z/open_earth_map
+  train_split: train
+  val_split: val
+  image_column: image
+  mask_column: mask
+  ignore_index: 255
+  # Official OpenEarthMap uses 0=no-data, 1..8=classes; "auto" normalizes to 0..7 + 255.
+  label_mode: auto
+  num_classes: 8
+  class_names:
+    - bareland
+    - rangeland
+    - developed_space
+    - road
+    - tree
+    - water
+    - agriculture_land
+    - building
+  class_prompts:
+    - "bareland and bare soil"
+    - "rangeland, grass and meadow"
+    - "developed space, pavement and parking lot"
+    - "road and street"
+    - "tree and forest canopy"
+    - "water, river and lake"
+    - "agricultural farmland and cropland"
+    - "building and rooftop"
+  sam3_resolution: 1008
+  dinov3_resolution: 512
+
+model:
+  sam3_repo: facebook/sam3
+  dinov3_repo: facebook/dinov3-vitl16-pretrain-sat493m
+  split_block_idx: 24
+  num_recursive_rounds: 3
+  sparse_top_windows: 3     # Out of 9 native 24x24 windows (33.3% late-ViT window compute)
+  use_sam3_detr: true
+  use_dinov3: true
+  use_inner_link: true
+  use_feedback_loop: true
+  feedback_dim: 256
+
+train_inner:
+  epochs: 2
+  batch_size: 2
+  lr: 5.0e-4
+  weight_decay: 0.01
+  cos_weight: 1.0
+  mse_weight: 0.1
+  max_samples: 800
+
+train_outer:
+  epochs: 8
+  batch_size: 1
+  grad_accum_steps: 8
+  lr: 3.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  non_last_loss_weight: 0.2
+  ce_weight: 1.0
+  dice_weight: 1.0
+  focal_weight: 0.5
+  consistency_weight: 0.05
+  precision: bf16
