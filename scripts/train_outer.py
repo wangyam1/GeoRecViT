@@ -24,7 +24,12 @@ from tqdm import tqdm
 from georecvit.data import build_rs_datasets, load_yaml_config
 from georecvit.losses import MultiRoundSegmentationLoss
 from georecvit.models import DINOv3Expert, GeoRecViT, GeoRecViTConfig, SAM3RecursiveBackbone
-from georecvit.utils import SegmentationMeter, load_georecvit_links, save_georecvit_links
+from georecvit.utils import (
+    SegmentationMeter,
+    extract_boundary_mask,
+    load_georecvit_links,
+    save_georecvit_links,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,8 +40,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--inner_ckpt", type=str, default="", help="Optional Stage 1 inner warm-start .pt")
     p.add_argument("--anchor_ckpt", type=str, default="", help="Optional Stage 2a single-pass anchor .pt")
     p.add_argument("--freeze_round1_anchor", action="store_true", help="Stage 2b: freeze Round-1 anchor and train ONLY closed-loop recursion triad")
+    p.add_argument("--anchor_perturb_prob", type=float, default=0.0, help="Training-only Stochastic Anchor Denoising prob for Stage 2b (e.g. 0.70)")
     p.add_argument("--weight_decay", type=float, default=None)
     p.add_argument("--active_refine_weight", type=float, default=0.5)
+    p.add_argument("--active_dice_weight", type=float, default=1.0)
+    p.add_argument("--boundary_weight", type=float, default=0.5)
     p.add_argument("--cache_dir", type=str, default="/content/georecvit_cache/datasets")
     p.add_argument("--save_dir", type=str, default="/content/georecvit_cache/checkpoints/outer")
     p.add_argument("--num_rounds", type=int, default=None)
@@ -80,6 +88,7 @@ def evaluate(
 ) -> dict:
     model.eval()
     meters = [SegmentationMeter(len(class_names), class_names, ignore_index) for _ in range(num_rounds)]
+    boundary_meters = [SegmentationMeter(len(class_names), class_names, ignore_index) for _ in range(num_rounds)]
     active_meters = (
         [SegmentationMeter(len(class_names), class_names, ignore_index) for _ in range(num_rounds)]
         if num_rounds > 1
@@ -105,6 +114,9 @@ def evaluate(
         t_total += time.perf_counter() - t0
         n_img += images.shape[0]
 
+        bmask = extract_boundary_mask(masks, ignore_index=ignore_index, radius=4)
+        boundary_targets = torch.where(bmask, masks, torch.full_like(masks, ignore_index))
+
         union_active = None
         if active_meters is not None and out.get("active_masks_hi"):
             u = torch.stack(out["active_masks_hi"], dim=0).amax(dim=0)  # [B, 1, 288, 288]
@@ -115,16 +127,19 @@ def evaluate(
             lg_up = F.interpolate(lg.float(), size=masks.shape[-2:], mode="bilinear", align_corners=False)
             pred = lg_up.argmax(dim=1)
             meters[r].update(pred, masks)
+            boundary_meters[r].update(pred, boundary_targets)
             if active_meters is not None and union_active is not None:
                 active_meters[r].update(pred, union_active)
 
     per_round = [m.compute() for m in meters]
+    boundary_per_round_miou = [m.compute()["mIoU"] for m in boundary_meters]
     active_per_round_miou = (
         [m.compute()["mIoU"] for m in active_meters] if active_meters is not None else []
     )
     return {
         "final": per_round[-1],
         "per_round_mIoU": [r["mIoU"] for r in per_round],
+        "boundary_per_round_mIoU": boundary_per_round_miou,
         "active_window_per_round_mIoU": active_per_round_miou,
         "avg_val_latency_ms": round(1000.0 * t_total / max(n_img, 1), 2),
         "per_round": per_round,
@@ -197,6 +212,7 @@ def main() -> None:
         use_dinov3=use_dinov3,
         use_inner_link=(not args.no_inner_link) and bool(m_cfg.get("use_inner_link", True)),
         use_feedback_loop=(num_rounds > 1) and bool(m_cfg.get("use_feedback_loop", True)),
+        anchor_perturb_prob=float(args.anchor_perturb_prob),
     )
     model = GeoRecViT(sam3_wrapper, dinov3, model_cfg).to(device)
     if args.inner_ckpt:
@@ -230,6 +246,9 @@ def main() -> None:
         dice_weight=float(t_cfg.get("dice_weight", 1.0)),
         focal_weight=float(t_cfg.get("focal_weight", 0.5)),
         active_refine_weight=float(args.active_refine_weight),
+        active_dice_weight=float(args.active_dice_weight),
+        boundary_weight=float(args.boundary_weight),
+        skip_round1_loss=bool(args.freeze_round1_anchor),
     )
     params = model.trainable_parameters()
     wd = args.weight_decay if args.weight_decay is not None else float(t_cfg.get("weight_decay", 0.01))
@@ -313,6 +332,7 @@ def main() -> None:
             "train_loss": round(loss_acc / max(steps, 1), 4),
             "val_mIoU": cur_miou,
             "val_per_round_mIoU": val_res["per_round_mIoU"],
+            "boundary_per_round_mIoU": val_res["boundary_per_round_mIoU"],
             "active_window_per_round_mIoU": val_res["active_window_per_round_mIoU"],
             "avg_val_latency_ms": val_res["avg_val_latency_ms"],
             "val_mF1": val_res["final"]["mF1"],
@@ -324,6 +344,7 @@ def main() -> None:
         print(
             f"[outer] ep={ep}/{epochs} loss={rec['train_loss']:.4f} "
             f"val_mIoU={cur_miou:.2f} rounds={rec['val_per_round_mIoU']} "
+            f"bnd={rec['boundary_per_round_mIoU']} "
             f"active_win={rec['active_window_per_round_mIoU']} ms={rec['avg_val_latency_ms']}",
             flush=True,
         )

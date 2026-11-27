@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 from georecvit.data import build_rs_datasets, load_yaml_config
 from georecvit.models import DINOv3Expert, GeoRecViT, GeoRecViTConfig, SAM3RecursiveBackbone
-from georecvit.utils import SegmentationMeter, load_georecvit_links
+from georecvit.utils import SegmentationMeter, extract_boundary_mask, load_georecvit_links
 
 
 def parse_args() -> argparse.Namespace:
@@ -119,6 +119,7 @@ def main() -> None:
 
     for top_m in args.windows_list:
         meters = {r: SegmentationMeter(len(class_names), class_names, ignore_index) for r in args.rounds_list}
+        boundary_meters = {r: SegmentationMeter(len(class_names), class_names, ignore_index) for r in args.rounds_list}
         active_meters = {r: SegmentationMeter(len(class_names), class_names, ignore_index) for r in args.rounds_list}
         t_total = 0.0
         n_img = 0
@@ -164,6 +165,9 @@ def main() -> None:
                 t_total += time.perf_counter() - t0
                 n_img += images.shape[0]
 
+                bmask = extract_boundary_mask(masks, ignore_index=ignore_index, radius=4)
+                boundary_targets = torch.where(bmask, masks, torch.full_like(masks, ignore_index))
+
                 union_active = None
                 if out.get("active_masks_hi"):
                     u = torch.stack(out["active_masks_hi"], dim=0).amax(dim=0)
@@ -177,6 +181,7 @@ def main() -> None:
                     )
                     pred = lg_up.argmax(dim=1)
                     meters[r].update(pred, masks)
+                    boundary_meters[r].update(pred, boundary_targets)
                     if union_active is not None:
                         active_meters[r].update(pred, union_active)
 
@@ -185,6 +190,7 @@ def main() -> None:
             "active_window_ratio": round(top_m / 9.0, 3),
             "avg_latency_ms_at_max_R": round(1000.0 * t_total / max(n_img, 1), 2),
             "by_round": {f"R={r}": meters[r].compute() for r in args.rounds_list},
+            "boundary_by_round_mIoU": {f"R={r}": boundary_meters[r].compute()["mIoU"] for r in args.rounds_list},
             "active_window_by_round_mIoU": {f"R={r}": active_meters[r].compute()["mIoU"] for r in args.rounds_list},
         }
         results["sweeps"].append(entry)

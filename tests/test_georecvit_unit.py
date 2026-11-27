@@ -22,10 +22,15 @@ import torch.nn.functional as F
 
 from georecvit.data.rs_datasets import normalize_mask_array
 from georecvit.losses import MultiRoundSegmentationLoss
-from georecvit.models import GeoRecViT, GeoRecViTConfig, UncertaintyWindowRouter
+from georecvit.models import DINOv3OnlySegmenter, GeoRecViT, GeoRecViTConfig, UncertaintyWindowRouter
 from georecvit.models.sam3_wrapper import LateViTOutput, SAM3DecodeOutput
 from georecvit.models.uncertainty_router import gather_selected_windows, scatter_selected_windows
-from georecvit.utils import SegmentationMeter, load_georecvit_links, save_georecvit_links
+from georecvit.utils import (
+    SegmentationMeter,
+    extract_boundary_mask,
+    load_georecvit_links,
+    save_georecvit_links,
+)
 
 
 class _MockWindowBlock(nn.Module):
@@ -238,14 +243,27 @@ def test_georecvit_inner_and_outer_end_to_end(tmp_path: Path) -> None:
     out_ev = GeoRecViT(sam3, dino, cfg_every)(imgs, class_prompts=prompts, num_rounds=2, top_m_windows=3)
     assert len(out_ev["round_logits"]) == 2
 
-    # 2c. Verify Stage 2b decoupled mode (frozen Round-1 anchor -> gradients ONLY in recursion triad)
-    model_2b = GeoRecViT(sam3, dino, cfg)
+    # 2c. Verify Stage 2b decoupled mode + CSPR + Stochastic Anchor Denoising (SAD)
+    cfg_2b = GeoRecViTConfig(
+        num_classes=7,
+        pe_dim=64,
+        sat_dim=64,
+        decoder_dim=32,
+        window_size=4,
+        num_recursive_rounds=3,
+        sparse_top_windows=3,
+        anchor_perturb_prob=1.0,
+    )
+    model_2b = GeoRecViT(sam3, dino, cfg_2b)
     model_2b.freeze_round1_anchor()
     model_2b.train()
     out_2b = model_2b(imgs, class_prompts=prompts, num_rounds=3, top_m_windows=3)
     assert not out_2b["round_logits"][0].requires_grad
     assert out_2b["round_logits"][1].requires_grad and out_2b["round_logits"][2].requires_grad
-    loss_2b = criterion(out_2b["round_logits"], masks, active_masks_hi=out_2b["active_masks_hi"])
+    crit_2b = MultiRoundSegmentationLoss(
+        ignore_index=255, active_refine_weight=1.5, active_dice_weight=1.0, boundary_weight=0.5, skip_round1_loss=True
+    )
+    loss_2b = crit_2b(out_2b["round_logits"], masks, active_masks_hi=out_2b["active_masks_hi"])
     loss_2b["loss"].backward()
     for frozen_name in ("sat_outer_link", "inner_link", "readout"):
         mod = getattr(model_2b, frozen_name)
@@ -255,18 +273,60 @@ def test_georecvit_inner_and_outer_end_to_end(tmp_path: Path) -> None:
         assert any(p.grad is not None and p.grad.abs().sum().item() > 0 for p in mod.parameters()), (
             f"Stage 2b module {active_name} received no grad!"
         )
+    # Verify CSPR scene_proto_weight and dedicated sat_refine_proj receive non-zero grads
+    assert model_2b.sparse_refiner is not None
+    assert model_2b.sparse_refiner.scene_proto_weight.grad is not None
+    assert model_2b.sparse_refiner.scene_proto_weight.grad.abs().item() > 0
+    assert any(
+        p.grad is not None and p.grad.abs().sum().item() > 0
+        for p in model_2b.sparse_refiner.sat_refine_proj.parameters()
+    )
+    # Verify SAD is STRICTLY OFF in eval mode (deterministic Round 1 + exact 0.0 outside active mask)
+    model_2b.eval()
+    with torch.no_grad():
+        ev_a = model_2b(imgs, class_prompts=prompts, num_rounds=3, top_m_windows=3)
+        ev_b = model_2b(imgs, class_prompts=prompts, num_rounds=3, top_m_windows=3)
+    assert torch.allclose(ev_a["round_logits"][0], ev_b["round_logits"][0], atol=1e-6)
+    diff_eval = (ev_a["round_logits"][1] - ev_a["round_logits"][0]).abs()
+    act_eval = ev_a["active_masks_hi"][0]
+    assert diff_eval[act_eval.expand_as(diff_eval) < 0.5].max().item() < 1e-6
 
     # 3. Verify lightweight checkpoint save & reload
     ckpt = save_georecvit_links(model, tmp_path, tag="test")
     loaded = load_georecvit_links(model, ckpt, strict=True)
     assert "sat_outer_link" in loaded and "feedback_outer_link" in loaded
 
-    # 4. Verify metrics & label normalization
+    # 4. Verify metrics, boundary mask, & label normalization
     meter = SegmentationMeter(num_classes=7, ignore_index=255)
     meter.update(out["final_logits"].argmax(dim=1), masks)
     stats = meter.compute()
     assert 0.0 <= stats["mIoU"] <= 100.0
 
+    # Boundary mask should detect class transitions while ignoring ignore_index edges
+    synth = torch.zeros(1, 16, 16, dtype=torch.long)
+    synth[:, :, 8:] = 1
+    synth[:, :4, :4] = 255
+    bmask = extract_boundary_mask(synth, ignore_index=255, radius=2)
+    assert bool(bmask[0, 8, 7].item()) and bool(bmask[0, 8, 8].item())
+    assert not bool(bmask[0, 12, 0].item())
+    assert not bool(bmask[0, 0, 0].item())  # ignore pixels never marked as boundary
+
     raw_1idx = np.array([[0, 1, 7], [2, 3, 0]], dtype=np.uint8)
     norm_1idx = normalize_mask_array(raw_1idx, num_classes=7, label_offset=1, ignore_index=255)
     assert norm_1idx.tolist() == [[255, 0, 6], [1, 2, 255]]
+
+
+def test_dinov3_only_segmenter() -> None:
+    torch.manual_seed(7)
+    dino = _MockDINOv3Expert(sat_dim=64, grid=12)
+    seg = DINOv3OnlySegmenter(dino, num_classes=8, hidden_dim=32, out_size=24)
+    seg.train()
+    imgs = torch.rand(2, 3, 24, 24)
+    masks = torch.randint(0, 8, (2, 24, 24))
+    out = seg(imgs)
+    assert out["final_logits"].shape == (2, 8, 24, 24)
+    crit = MultiRoundSegmentationLoss(ignore_index=255, non_last_loss_weight=0.0, active_refine_weight=0.0)
+    loss = crit(out["round_logits"], masks)["loss"]
+    loss.backward()
+    assert any(p.grad is not None and p.grad.abs().sum().item() > 0 for p in seg.trainable_parameters())
+    assert all(p.grad is None for p in dino.parameters())

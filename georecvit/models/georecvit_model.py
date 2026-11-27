@@ -47,6 +47,7 @@ class GeoRecViTConfig:
     use_dinov3: bool = True
     use_inner_link: bool = True
     use_feedback_loop: bool = True
+    anchor_perturb_prob: float = 0.0
 
 
 class MultiScaleFPNFusion(nn.Module):
@@ -162,46 +163,114 @@ class ConceptCalibrationReadout(nn.Module):
 
 
 class SparseResidualRefinementHead(nn.Module):
-    """Explicit differential residual refinement head for recursive Rounds r >= 2.
+    """Confidence-Anchored Scene Prototype + Multi-Scale ASPP Sparse Residual Refiner (v4).
 
-    Computes a localized logit correction strictly inside routed uncertain windows:
-        Z^(r) = Z^(r-1) + g_r * R_phi(F_fpn^(r), dF_fpn^(r), F_sat, P^(r-1), U^(r-1)) * M_active^(r)
-    where `dF_fpn^(r) = F_fpn^(r) - F_fpn^(r-1)` captures the top-down feature shift
-    produced by re-evaluating frozen late PE-ViT blocks under feedback tokens.
-    Because `M_active^(r)` is an STE binary mask, confident regions remain 100%
-    invariant while the router learns end-to-end which windows benefit most from recursion.
+    Computes a localized logit correction strictly inside STE-routed uncertain windows:
+        Z^(r) = Z^(r-1) + g_r * R_phi(F_fpn^(r), dF_fpn^(r), F_sat_ref, S_scene^(r), P^(r-1), U^(r-1)) * M_active^(r)
+    Three principled closed-loop mechanisms distinguish Rounds r >= 2 from single-pass R=1:
+      1. Dedicated trainable `sat_refine_proj`: directly queries frozen DINOv3-SAT cues
+         specifically for error correction (not choked by frozen Round-1 readout weights).
+      2. Confidence-Anchored Scene Prototype Refinement (CSPR): aggregates per-scene,
+         per-class exemplars `mu_c^(r-1)` from HIGH-CONFIDENCE regions (`P * (1 - U)^2`)
+         of the SAME satellite tile, transferring exact in-scene illumination/roof/soil
+         appearance into ambiguous shadowed windows via cosine prototype affinity `S_scene^(r)`.
+      3. Multi-scale dilated ASPP (`d=1, 2, 4`) capturing full building/road/field context
+         across each 96x96 high-resolution active window while guaranteeing EXACT `0.0` drift
+         outside `M_active^(r)`.
     """
 
     def __init__(
         self,
         num_classes: int,
         fpn_dim: int = 256,
+        sat_dim: int = 1024,
         proto_dim: int = 256,
+        cspr_dim: int = 128,
         max_rounds: int = 6,
     ) -> None:
         super().__init__()
         self.fpn_norm = nn.GroupNorm(8, fpn_dim)
         self.delta_norm = nn.GroupNorm(8, fpn_dim)
-        in_ch = fpn_dim * 3 + num_classes + 2
-        self.fuse = nn.Sequential(
+        self.sat_refine_proj = nn.Sequential(
+            nn.Conv2d(sat_dim, fpn_dim, kernel_size=1, bias=False),
+            nn.GroupNorm(8, fpn_dim),
+            nn.GELU(),
+        )
+        # Confidence-Anchored Scene Prototype Refinement (CSPR) descriptor projection
+        self.cspr_proj = nn.Sequential(
+            nn.Conv2d(fpn_dim * 2, cspr_dim, kernel_size=1, bias=False),
+            nn.GroupNorm(8, cspr_dim),
+            nn.GELU(),
+        )
+
+        # Multi-scale dilated ASPP refiner over FPN + dFPN + SAT_ref + probs + scene_sim + U
+        in_ch = fpn_dim * 3 + num_classes * 2 + 2
+        self.stem = nn.Sequential(
             nn.Conv2d(in_ch, fpn_dim, kernel_size=1, bias=False),
             nn.GroupNorm(8, fpn_dim),
             nn.GELU(),
             nn.Dropout2d(0.15),
+        )
+        b_ch = max(32, fpn_dim // 2)
+        self.branch_d1 = nn.Sequential(
+            nn.Conv2d(fpn_dim, b_ch, kernel_size=3, padding=1, dilation=1, bias=False),
+            nn.GroupNorm(8, b_ch),
+            nn.GELU(),
+        )
+        self.branch_d2 = nn.Sequential(
+            nn.Conv2d(fpn_dim, b_ch, kernel_size=3, padding=2, dilation=2, bias=False),
+            nn.GroupNorm(8, b_ch),
+            nn.GELU(),
+        )
+        self.branch_d4 = nn.Sequential(
+            nn.Conv2d(fpn_dim, b_ch, kernel_size=3, padding=4, dilation=4, bias=False),
+            nn.GroupNorm(8, b_ch),
+            nn.GELU(),
+        )
+        self.merge = nn.Sequential(
+            nn.Conv2d(b_ch * 3, fpn_dim, kernel_size=1, bias=False),
+            nn.GroupNorm(8, fpn_dim),
+            nn.GELU(),
             nn.Conv2d(fpn_dim, fpn_dim, kernel_size=3, padding=1, bias=False),
             nn.GroupNorm(8, fpn_dim),
             nn.GELU(),
-            nn.Conv2d(fpn_dim, fpn_dim, kernel_size=3, padding=2, dilation=2, bias=False),
-            nn.GroupNorm(8, fpn_dim),
-            nn.GELU(),
         )
+
         self.delta_proto_proj = nn.Conv2d(fpn_dim, proto_dim, kernel_size=1)
         self.delta_cls = nn.Conv2d(fpn_dim, num_classes, kernel_size=1)
-        # Balanced non-zero init: keeps Step-0 clean while delivering strong Stage 2b gradients
         nn.init.normal_(self.delta_cls.weight, std=0.01)
         nn.init.zeros_(self.delta_cls.bias)
         self.proto_weight = nn.Parameter(torch.tensor(0.35))
-        self.round_scales = nn.Parameter(torch.full((max_rounds,), 0.4))
+        self.scene_proto_weight = nn.Parameter(torch.tensor(0.5))
+        self.round_scales = nn.Parameter(torch.full((max_rounds,), 0.5))
+
+    def _compute_scene_prototype_affinity(
+        self,
+        fpn_n: torch.Tensor,
+        sat_ref: torch.Tensor,
+        prev_probs: torch.Tensor,
+        entropy_map: torch.Tensor,
+        disagreement_map: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute CSPR in-scene confident class prototype affinity `[B, C, H, W]`."""
+        desc = self.cspr_proj(torch.cat([fpn_n, sat_ref], dim=1))  # [B, D, H, W]
+        lo_hw = entropy_map.shape[-2:]
+        desc_lo = F.interpolate(desc.float(), size=lo_hw, mode="bilinear", align_corners=False)
+        probs_lo = F.interpolate(prev_probs.float(), size=lo_hw, mode="bilinear", align_corners=False)
+
+        # Emphasize high-confidence anchor regions (mostly the inactive confident windows)
+        u_lo = (0.5 * (entropy_map.float() + disagreement_map.float())).clamp(0.0, 1.0)
+        conf_lo = (1.0 - u_lo) ** 2  # [B, 1, H_lo, W_lo]
+        weights = probs_lo * conf_lo  # [B, C, H_lo, W_lo]
+
+        proto_num = torch.einsum("bchw,bdhw->bcd", weights, desc_lo)  # [B, C, D]
+        mass = weights.sum(dim=(2, 3))  # [B, C]
+        scene_protos = F.normalize(proto_num / (mass.unsqueeze(-1) + 1e-4), dim=-1, eps=1e-6)
+        present_gate = (mass / 8.0).clamp(0.0, 1.0).unsqueeze(-1).unsqueeze(-1)  # [B, C, 1, 1]
+
+        desc_norm = F.normalize(desc.float(), dim=1, eps=1e-6)  # [B, D, H, W]
+        scene_sim = torch.einsum("bdhw,bcd->bchw", desc_norm, scene_protos) * present_gate
+        return scene_sim
 
     def forward(
         self,
@@ -215,11 +284,26 @@ class SparseResidualRefinementHead(nn.Module):
         active_mask_grid: torch.Tensor,
         class_prototypes: torch.Tensor,
         round_idx: int,
+        f_sat: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Refine `prev_logits` `[B, C, H, W]` inside STE-routed windows `[B, 1, H, W]`."""
+        """Refine `prev_logits` `[B, C, H, W]` strictly inside STE-routed windows."""
         H, W = fpn_high.shape[-2:]
         fpn_n = self.fpn_norm(fpn_high)
         dfpn_n = self.delta_norm(fpn_high - prev_fpn_high)
+
+        if f_sat is not None:
+            sat_proj = self.sat_refine_proj(f_sat.permute(0, 3, 1, 2).contiguous().to(fpn_n.dtype))
+            sat_ref = F.interpolate(sat_proj, size=(H, W), mode="bilinear", align_corners=False)
+        else:
+            sat_ref = sat_up.to(fpn_n.dtype)
+
+        scene_sim = self._compute_scene_prototype_affinity(
+            fpn_n=fpn_n,
+            sat_ref=sat_ref,
+            prev_probs=prev_probs,
+            entropy_map=entropy_map,
+            disagreement_map=disagreement_map,
+        )
 
         ent_hi = F.interpolate(entropy_map.to(fpn_n.dtype), size=(H, W), mode="bilinear", align_corners=False)
         dis_hi = F.interpolate(disagreement_map.to(fpn_n.dtype), size=(H, W), mode="bilinear", align_corners=False)
@@ -228,16 +312,29 @@ class SparseResidualRefinementHead(nn.Module):
             active_mask_grid.permute(0, 3, 1, 2).float(), size=(H, W), mode="nearest"
         )
 
-        x = torch.cat([fpn_n, dfpn_n, sat_up.to(fpn_n.dtype), prev_probs.to(fpn_n.dtype), ent_hi, dis_hi], dim=1)
-        h = self.fuse(x)
+        x = torch.cat(
+            [
+                fpn_n,
+                dfpn_n,
+                sat_ref,
+                prev_probs.to(fpn_n.dtype),
+                scene_sim.to(fpn_n.dtype),
+                ent_hi,
+                dis_hi,
+            ],
+            dim=1,
+        )
+        s = self.stem(x)
+        h = self.merge(torch.cat([self.branch_d1(s), self.branch_d2(s), self.branch_d4(s)], dim=1))
         vis_emb = F.normalize(self.delta_proto_proj(h).float(), dim=1, eps=1e-6)
         proto = F.normalize(class_prototypes.float().to(device=h.device), dim=-1, eps=1e-6)
         delta_proto = torch.einsum("bchw,kc->bkhw", vis_emb, proto) * self.proto_weight.float()
         delta_cls = self.delta_cls(h).float()
+        delta_scene = self.scene_proto_weight.float() * scene_sim
 
         r_idx = min(max(round_idx, 0), self.round_scales.shape[0] - 1)
         scale = self.round_scales[r_idx].float()
-        delta_logits = scale * (delta_cls + delta_proto)
+        delta_logits = scale * (delta_cls + delta_proto + delta_scene)
         return prev_logits.float() + delta_logits * mask_hi
 
 
@@ -308,6 +405,7 @@ class GeoRecViT(nn.Module):
             SparseResidualRefinementHead(
                 num_classes=config.num_classes,
                 fpn_dim=config.decoder_dim,
+                sat_dim=config.sat_dim,
                 proto_dim=config.decoder_dim,
             )
             if config.use_feedback_loop
@@ -450,6 +548,15 @@ class GeoRecViT(nn.Module):
 
         # Inject heterogeneous satellite structural features via OuterLink
         r1_frozen = bool(getattr(self, "_round1_anchor_frozen", False))
+        # Stochastic Anchor Denoising (SAD): training-only Round-1 perturbation when anchor is frozen
+        # so Stage 2b sees realistic validation-like errors without extra data; strictly OFF at eval().
+        perturb_r1 = (
+            self.training
+            and r1_frozen
+            and R > 1
+            and self.cfg.anchor_perturb_prob > 0.0
+            and (torch.rand((), device=device).item() < self.cfg.anchor_perturb_prob)
+        )
         if r1_frozen:
             with torch.no_grad():
                 sat_delta = (
@@ -458,6 +565,17 @@ class GeoRecViT(nn.Module):
                     else None
                 )
                 base_mid = f_pe_mid if sat_delta is None else (f_pe_mid + sat_delta)
+                if perturb_r1:
+                    if sat_delta is not None:
+                        sat_drop = F.dropout2d(
+                            sat_delta.permute(0, 3, 1, 2).float(), p=0.30, training=True
+                        ).permute(0, 2, 3, 1).to(f_pe_mid.dtype)
+                        r1_mid = f_pe_mid + sat_drop
+                    else:
+                        r1_mid = f_pe_mid
+                    r1_mid = r1_mid + (0.15 * torch.randn_like(r1_mid))
+                else:
+                    r1_mid = base_mid
         else:
             sat_delta = (
                 self.sat_outer_link(f_sat, apply_gate=True)
@@ -465,6 +583,8 @@ class GeoRecViT(nn.Module):
                 else None
             )
             base_mid = f_pe_mid if sat_delta is None else (f_pe_mid + sat_delta)
+            r1_mid = base_mid
+        # Clean state `cur_mid` is preserved for Rounds r >= 2 so sparse recursion denoises Round 1!
         cur_mid = base_mid
 
         round_logits: List[torch.Tensor] = []
@@ -486,11 +606,11 @@ class GeoRecViT(nn.Module):
             if r == 0:
                 if r1_frozen:
                     with torch.no_grad():
-                        x_in = self.inner_link(cur_mid) if self.inner_link is not None else cur_mid
+                        x_in = self.inner_link(r1_mid) if self.inner_link is not None else r1_mid
                         late_out = self.sam3_wrapper.forward_late_vit(x_in)
                         fpn_feats, fpn_pos = self.sam3_wrapper.forward_neck(late_out.vit_out)
                 else:
-                    x_in = self.inner_link(cur_mid) if self.inner_link is not None else cur_mid
+                    x_in = self.inner_link(r1_mid) if self.inner_link is not None else r1_mid
                     late_out = self.sam3_wrapper.forward_late_vit(x_in)
                     fpn_feats, fpn_pos = self.sam3_wrapper.forward_neck(late_out.vit_out)
                 active_ratios.append(1.0)
@@ -585,6 +705,8 @@ class GeoRecViT(nn.Module):
                             sat_feats_grid=f_sat,
                             class_prototypes=class_prototypes,
                         )
+                        if perturb_r1:
+                            logits_r = logits_r + 0.25 * torch.randn_like(logits_r)
                 else:
                     if f_sat is not None:
                         sat_proj = self.readout.sat_to_fpn(f_sat.permute(0, 3, 1, 2).contiguous())
@@ -616,6 +738,7 @@ class GeoRecViT(nn.Module):
                     active_mask_grid=routing.active_mask,
                     class_prototypes=class_prototypes,
                     round_idx=r,
+                    f_sat=f_sat,
                 )
                 H_hi, W_hi = decode_out.fpn_feats[0].shape[-2:]
                 active_masks_hi.append(

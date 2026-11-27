@@ -5,6 +5,33 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Sequence
 
 import torch
+import torch.nn.functional as F
+
+
+@torch.no_grad()
+def extract_boundary_mask(
+    targets: torch.Tensor,
+    ignore_index: int = 255,
+    radius: int = 4,
+) -> torch.Tensor:
+    """Return boolean `[B, H, W]` mask of valid pixels within `radius` px of a class boundary."""
+    valid = (targets != ignore_index) & (targets >= 0)
+    if not valid.any():
+        return torch.zeros_like(valid)
+    safe_max = torch.where(valid, targets, torch.full_like(targets, -1))
+    safe_min = torch.where(valid, targets, torch.full_like(targets, 100000))
+    k = 2 * max(1, int(radius)) + 1
+    local_max = (
+        F.max_pool2d(safe_max.unsqueeze(1).float(), kernel_size=k, stride=1, padding=radius)
+        .squeeze(1)
+        .long()
+    )
+    local_min = (
+        -F.max_pool2d(-safe_min.unsqueeze(1).float(), kernel_size=k, stride=1, padding=radius)
+        .squeeze(1)
+        .long()
+    )
+    return valid & (local_max != local_min)
 
 
 class SegmentationMeter:

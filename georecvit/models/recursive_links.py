@@ -145,7 +145,7 @@ class FeedbackEncoderLink(nn.Module):
             hidden_mult=1.0,
             use_spatial_dwconv=False,
             zero_init_gate=False,
-            init_gate_value=0.1,
+            init_gate_value=0.25,
         )
         self.round_embed = nn.Embedding(max_rounds, out_dim)
         nn.init.normal_(self.round_embed.weight, std=0.02)

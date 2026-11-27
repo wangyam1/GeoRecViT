@@ -16,6 +16,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from georecvit.utils.metrics import extract_boundary_mask
+
 
 def multiclass_dice_loss(
     logits: torch.Tensor,
@@ -77,6 +79,9 @@ class MultiRoundSegmentationLoss(nn.Module):
         dice_weight: float = 1.0,
         focal_weight: float = 0.5,
         active_refine_weight: float = 0.5,
+        active_dice_weight: float = 1.0,
+        boundary_weight: float = 0.5,
+        skip_round1_loss: bool = False,
     ) -> None:
         super().__init__()
         self.ignore_index = ignore_index
@@ -85,6 +90,9 @@ class MultiRoundSegmentationLoss(nn.Module):
         self.dice_weight = dice_weight
         self.focal_weight = focal_weight
         self.active_refine_weight = active_refine_weight
+        self.active_dice_weight = active_dice_weight
+        self.boundary_weight = boundary_weight
+        self.skip_round1_loss = skip_round1_loss
 
     def _resize_targets(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         if logits.shape[-2:] != targets.shape[-2:]:
@@ -125,7 +133,7 @@ class MultiRoundSegmentationLoss(nn.Module):
         targets: torch.Tensor,
         active_mask_hi: torch.Tensor,
     ) -> torch.Tensor:
-        """Focused CE + Focal refinement loss strictly inside routed uncertain windows."""
+        """Focused CE + SoftDice + Focal + Boundary refinement loss inside routed windows."""
         targets_rs = self._resize_targets(logits, targets)
         mask_bool = active_mask_hi.squeeze(1) > 0.5
         masked_targets = torch.where(
@@ -134,9 +142,22 @@ class MultiRoundSegmentationLoss(nn.Module):
         valid = masked_targets != self.ignore_index
         if not valid.any():
             return logits.sum() * 0.0
-        ce = F.cross_entropy(logits.float(), masked_targets, ignore_index=self.ignore_index)
-        foc = multiclass_focal_loss(logits, masked_targets, ignore_index=self.ignore_index)
-        return ce + 0.5 * foc
+        loss = F.cross_entropy(logits.float(), masked_targets, ignore_index=self.ignore_index)
+        loss = loss + 0.5 * multiclass_focal_loss(logits, masked_targets, ignore_index=self.ignore_index)
+        if self.active_dice_weight > 0:
+            loss = loss + self.active_dice_weight * multiclass_dice_loss(
+                logits, masked_targets, ignore_index=self.ignore_index
+            )
+        if self.boundary_weight > 0:
+            bmask = extract_boundary_mask(targets_rs, ignore_index=self.ignore_index, radius=2) & mask_bool
+            if bmask.any():
+                b_targets = torch.where(
+                    bmask, targets_rs, torch.full_like(targets_rs, self.ignore_index)
+                )
+                loss = loss + self.boundary_weight * F.cross_entropy(
+                    logits.float(), b_targets, ignore_index=self.ignore_index
+                )
+        return loss
 
     def forward(
         self,
@@ -146,8 +167,9 @@ class MultiRoundSegmentationLoss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         per_round = [self.single_round_loss(lg, targets) for lg in round_logits]
         final_loss = per_round[-1]
-        if len(per_round) > 1 and self.non_last_loss_weight > 0:
-            aux_loss = torch.stack(per_round[:-1]).mean()
+        aux_candidates = per_round[1:-1] if (self.skip_round1_loss and len(per_round) > 1) else per_round[:-1]
+        if aux_candidates and self.non_last_loss_weight > 0:
+            aux_loss = torch.stack(aux_candidates).mean()
             total = final_loss + self.non_last_loss_weight * aux_loss
         else:
             aux_loss = torch.zeros_like(final_loss)
