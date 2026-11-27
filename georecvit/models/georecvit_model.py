@@ -313,6 +313,7 @@ class GeoRecViT(nn.Module):
             else None
         )
         base_mid = f_pe_mid if sat_delta is None else (f_pe_mid + sat_delta)
+        cur_mid = base_mid
 
         round_logits: List[torch.Tensor] = []
         active_ratios: List[float] = []
@@ -326,7 +327,7 @@ class GeoRecViT(nn.Module):
 
         for r in range(R):
             if r == 0:
-                x_in = self.inner_link(base_mid) if self.inner_link is not None else base_mid
+                x_in = self.inner_link(cur_mid) if self.inner_link is not None else cur_mid
                 late_out = self.sam3_wrapper.forward_late_vit(x_in)
                 active_ratios.append(1.0)
             else:
@@ -348,12 +349,10 @@ class GeoRecViT(nn.Module):
                         decoder_context=prev_decode.decoder_context,
                         round_idx=r,
                     )
-                    # Mask feedback strictly to active high-uncertainty windows
-                    x_mid_r = base_mid + fb_tokens * routing.active_mask
-                else:
-                    x_mid_r = base_mid
+                    # Accumulate top-down latent feedback strictly inside active uncertain windows
+                    cur_mid = cur_mid + fb_tokens * routing.active_mask
 
-                x_in = self.inner_link(x_mid_r) if self.inner_link is not None else x_mid_r
+                x_in = self.inner_link(cur_mid) if self.inner_link is not None else cur_mid
                 late_out = self.sam3_wrapper.forward_late_vit(
                     x_mid=x_in,
                     selected_indices=routing.selected_indices,

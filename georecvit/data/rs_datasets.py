@@ -85,7 +85,9 @@ class RemoteSensingSegDataset(Dataset):
     ) -> None:
         super().__init__()
         if max_samples is not None and max_samples > 0 and max_samples < len(hf_split):
-            hf_split = hf_split.select(range(max_samples))
+            # Deterministic uniform striding covers all geographic regions / domains evenly
+            indices = np.linspace(0, len(hf_split) - 1, max_samples, dtype=int).tolist()
+            hf_split = hf_split.select(indices)
         self.ds = hf_split
         self.image_column = image_column
         self.mask_column = mask_column
@@ -178,7 +180,9 @@ class LocalPairedSegDataset(Dataset):
         super().__init__()
         pair_list = list(pairs)
         if max_samples is not None and max_samples > 0 and max_samples < len(pair_list):
-            pair_list = pair_list[:max_samples]
+            # Deterministic uniform striding preserves balanced Urban + Rural coverage
+            indices = np.linspace(0, len(pair_list) - 1, max_samples, dtype=int).tolist()
+            pair_list = [pair_list[i] for i in indices]
         self.pairs = pair_list
         self.num_classes = num_classes
         self.ignore_index = ignore_index
