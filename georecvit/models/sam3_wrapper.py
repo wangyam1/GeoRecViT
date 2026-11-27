@@ -56,6 +56,36 @@ class SAM3DecodeOutput:
     fpn_feats: List[torch.Tensor]   # [B, 256, 288, 288], [B, 256, 144, 144], [B, 256, 72, 72]
 
 
+def _enable_grad_safe_sam3_mlp() -> None:
+    """Allow autograd to flow cleanly through frozen SAM 3 ViT blocks.
+
+    Upstream `sam3.perflib.fused.addmm_act` is inference-only and raises
+    ValueError whenever `torch.is_grad_enabled()` is True. When grad is enabled,
+    use exact differentiable `F.gelu(linear(x))` / `F.relu(linear(x))`.
+    """
+    try:
+        import sam3.model.vitdet as vitdet_mod
+        import sam3.perflib.fused as fused_mod
+    except ImportError:
+        return
+
+    orig_fn = getattr(fused_mod, "_orig_addmm_act", fused_mod.addmm_act)
+    fused_mod._orig_addmm_act = orig_fn
+
+    def _grad_safe_addmm_act(activation, linear, mat1):
+        if torch.is_grad_enabled():
+            out = linear(mat1)
+            if activation in (F.relu, nn.ReLU):
+                return F.relu(out)
+            if activation in (F.gelu, nn.GELU):
+                return F.gelu(out)
+            return activation()(out)
+        return orig_fn(activation, linear, mat1)
+
+    fused_mod.addmm_act = _grad_safe_addmm_act
+    vitdet_mod.addmm_act = _grad_safe_addmm_act
+
+
 class SAM3RecursiveBackbone(nn.Module):
     """Wraps a frozen `Sam3Image` model for sparse closed-loop late-ViT recursion."""
 
@@ -67,6 +97,7 @@ class SAM3RecursiveBackbone(nn.Module):
         use_grad_checkpoint: bool = True,
     ) -> None:
         super().__init__()
+        _enable_grad_safe_sam3_mlp()
         self.sam3 = sam3_model
         self.sam3.eval()
         for p in self.sam3.parameters():

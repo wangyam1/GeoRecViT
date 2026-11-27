@@ -1,0 +1,43 @@
+{
+  "dataset": "loveda",
+  "num_val_images": 50,
+  "label_offset": 1,
+  "avg_latency_ms": 1707.8,
+  "class_prompts": [
+    "background land and open ground",
+    "building roof and house",
+    "road and highway",
+    "water, river, pond and lake",
+    "barren land and bare soil",
+    "forest and trees",
+    "agricultural farmland and crop field"
+  ],
+  "sam3_semantic_only": {
+    "mIoU": 40.12,
+    "mF1": 55.73,
+    "OA": 53.85,
+    "per_class_IoU": {
+      "background": 16.74,
+      "building": 50.73,
+      "road": 55.14,
+      "water": 54.1,
+      "barren": 22.99,
+      "forest": 41.31,
+      "agricultural": 39.8
+    }
+  },
+  "sam3_dual_head": {
+    "mIoU": 37.41,
+    "mF1": 50.81,
+    "OA": 57.4,
+    "per_class_IoU": {
+      "background": 26.24,
+      "building": 56.97,
+      "road": 53.97,
+      "water": 55.12,
+      "barren": 0.01,
+      "forest": 21.63,
+      "agricultural": 47.91
+    }
+  }
+}
