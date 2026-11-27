@@ -8,11 +8,11 @@ build/
 .pytest_cache/
 
 # Heavy artifacts (keep ONLY on Colab / Google Drive, never push to GitHub)
-data/
-datasets/
-weights/
-checkpoints/
-outputs/
+/data/
+/datasets/
+/weights/
+/checkpoints/
+/outputs/
 *.pt
 *.pth
 *.bin
