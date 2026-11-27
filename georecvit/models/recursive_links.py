@@ -67,7 +67,8 @@ class SpatialOuterLink(nn.Module):
         out_dim: int,
         hidden_mult: float = 1.0,
         use_spatial_dwconv: bool = True,
-        zero_init_gate: bool = True,
+        zero_init_gate: bool = False,
+        init_gate_value: float = 0.1,
     ) -> None:
         super().__init__()
         self.in_dim = in_dim
@@ -89,7 +90,7 @@ class SpatialOuterLink(nn.Module):
         else:
             self.dwconv = None
 
-        init_val = 0.0 if zero_init_gate else 1.0
+        init_val = 0.0 if zero_init_gate else float(init_gate_value)
         self.gate = nn.Parameter(torch.full((out_dim,), init_val))
 
     def forward(self, x: torch.Tensor, apply_gate: bool = True) -> torch.Tensor:
@@ -143,7 +144,8 @@ class FeedbackEncoderLink(nn.Module):
             out_dim=out_dim,
             hidden_mult=1.0,
             use_spatial_dwconv=False,
-            zero_init_gate=True,
+            zero_init_gate=False,
+            init_gate_value=0.1,
         )
         self.round_embed = nn.Embedding(max_rounds, out_dim)
         nn.init.normal_(self.round_embed.weight, std=0.02)

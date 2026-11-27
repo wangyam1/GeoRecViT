@@ -83,8 +83,8 @@ class UncertaintyWindowRouter(nn.Module):
         if sat_feats is None:
             return torch.zeros((B, 1, H, W), device=pe_feats.device, dtype=pe_feats.dtype)
 
-        p = F.normalize(self.pe_proj(pe_feats), dim=-1)
-        s = F.normalize(self.sat_proj(sat_feats), dim=-1)
+        p = F.normalize(self.pe_proj(pe_feats).float(), dim=-1, eps=1e-6)
+        s = F.normalize(self.sat_proj(sat_feats).float(), dim=-1, eps=1e-6)
         cos_sim = (p * s).sum(dim=-1, keepdim=True)  # [B, H, W, 1] in [-1, 1]
         disagreement = 0.5 * (1.0 - cos_sim)         # [0, 1]
         return disagreement.permute(0, 3, 1, 2).contiguous()

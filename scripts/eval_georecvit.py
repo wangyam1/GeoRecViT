@@ -28,11 +28,14 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Evaluate GeoRecViT test-time scaling & sparse routing.")
     p.add_argument("--config", type=str, required=True)
     p.add_argument("--sam3_ckpt", type=str, required=True)
-    p.add_argument("--dinov3_dir", type=str, required=True)
+    p.add_argument("--dinov3_dir", type=str, default="")
     p.add_argument("--links_ckpt", type=str, required=True)
     p.add_argument("--cache_dir", type=str, default="/content/georecvit_cache/datasets")
     p.add_argument("--rounds_list", type=int, nargs="+", default=[1, 2, 3])
     p.add_argument("--windows_list", type=int, nargs="+", default=[1, 3, 5, 9])
+    p.add_argument("--no_dinov3", action="store_true")
+    p.add_argument("--detr_every_round", action="store_true")
+    p.add_argument("--class_chunk_size", type=int, default=2)
     p.add_argument("--max_val_samples", type=int, default=-1)
     p.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
     p.add_argument("--output_json", type=str, default="results/eval_georecvit_sweep.json")
@@ -59,29 +62,40 @@ def main() -> None:
         enable_segmentation=True,
         enable_inst_interactivity=False,
     )
+    if use_amp:
+        for mod in sam3_model.backbone.modules():
+            if isinstance(mod, (torch.nn.Linear, torch.nn.Conv2d, torch.nn.ConvTranspose2d, torch.nn.Embedding)):
+                mod.to(dtype=amp_dtype)
     sam3_wrapper = SAM3RecursiveBackbone(
         sam3_model=sam3_model,
         split_block_idx=int(m_cfg.get("split_block_idx", 24)),
         resolution=int(ds_cfg.get("sam3_resolution", 1008)),
         use_grad_checkpoint=False,
+        class_chunk_size=args.class_chunk_size,
     )
-    dinov3 = DINOv3Expert(
-        model_path=args.dinov3_dir,
-        input_size=int(ds_cfg.get("dinov3_resolution", 512)),
-        dtype=amp_dtype if use_amp else torch.float32,
+    use_dinov3 = (not args.no_dinov3) and bool(m_cfg.get("use_dinov3", True)) and bool(args.dinov3_dir)
+    dinov3 = (
+        DINOv3Expert(
+            model_path=args.dinov3_dir,
+            input_size=int(ds_cfg.get("dinov3_resolution", 512)),
+            dtype=amp_dtype if use_amp else torch.float32,
+        )
+        if use_dinov3
+        else None
     )
     model_cfg = GeoRecViTConfig(
         num_classes=int(ds_cfg["num_classes"]),
         pe_dim=sam3_wrapper.embed_dim,
-        sat_dim=dinov3.embed_dim,
+        sat_dim=dinov3.embed_dim if dinov3 is not None else 1024,
         decoder_dim=sam3_wrapper.d_model,
         window_size=sam3_wrapper.window_size,
         num_recursive_rounds=max(args.rounds_list),
         sparse_top_windows=int(m_cfg.get("sparse_top_windows", 3)),
         use_sam3_detr=bool(m_cfg.get("use_sam3_detr", True)),
-        use_dinov3=True,
+        detr_round1_only=(not args.detr_every_round) and bool(m_cfg.get("detr_round1_only", True)),
+        use_dinov3=use_dinov3,
         use_inner_link=True,
-        use_feedback_loop=True,
+        use_feedback_loop=(max(args.rounds_list) > 1),
     )
     model = GeoRecViT(sam3_wrapper, dinov3, model_cfg).to(device)
     load_georecvit_links(model, args.links_ckpt, strict=False)

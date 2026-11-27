@@ -190,21 +190,18 @@ def test_georecvit_inner_and_outer_end_to_end(tmp_path: Path) -> None:
     assert all(p.grad is None for p in sam3.parameters())
     assert all(p.grad is None for p in dino.parameters())
 
-    # 2. Stage 2 Outer-Loop R=3 closed-loop recursion
+    # 2. Stage 2 Outer-Loop R=3 closed-loop recursion (with DEFAULT non-zero gate init!)
     for p in model.trainable_parameters():
         p.grad = None
-
-    # Open gates slightly so Round 2/3 feedback carries active gradients cleanly
-    with torch.no_grad():
-        assert model.sat_outer_link is not None
-        assert model.feedback_outer_link is not None
-        model.sat_outer_link.gate.fill_(0.2)
-        model.feedback_outer_link.outer_bridge.gate.fill_(0.2)
 
     out = model(imgs, class_prompts=prompts, num_rounds=3, top_m_windows=3, return_routing=True)
     assert len(out["round_logits"]) == 3
     assert out["final_logits"].shape == (2, 7, 24, 24)
     assert out["active_ratios"] == [1.0, 3.0 / 9.0, 3.0 / 9.0]
+    # Verify multi-round outputs actually evolve across R=1 -> 2 -> 3 at default init
+    diff_12 = (out["round_logits"][1] - out["round_logits"][0]).abs().max().item()
+    diff_23 = (out["round_logits"][2] - out["round_logits"][1]).abs().max().item()
+    assert diff_12 > 1e-5 and diff_23 > 1e-5, f"Rounds identical: diff_12={diff_12}, diff_23={diff_23}"
 
     criterion = MultiRoundSegmentationLoss(ignore_index=255)
     loss_dict = criterion(out["round_logits"], masks)
@@ -220,6 +217,21 @@ def test_georecvit_inner_and_outer_end_to_end(tmp_path: Path) -> None:
     # Verify frozen backbones remain strictly untouched
     assert all(p.grad is None for p in sam3.parameters())
     assert all(p.grad is None for p in dino.parameters())
+
+    # 2b. Verify no-DETR and every-round-DETR config modes run cleanly
+    cfg_nodetr = GeoRecViTConfig(
+        num_classes=7, pe_dim=64, sat_dim=64, decoder_dim=32, window_size=4,
+        num_recursive_rounds=2, sparse_top_windows=3, use_sam3_detr=False,
+    )
+    out_nd = GeoRecViT(sam3, dino, cfg_nodetr)(imgs, class_prompts=prompts, num_rounds=2, top_m_windows=3)
+    assert len(out_nd["round_logits"]) == 2
+
+    cfg_every = GeoRecViTConfig(
+        num_classes=7, pe_dim=64, sat_dim=64, decoder_dim=32, window_size=4,
+        num_recursive_rounds=2, sparse_top_windows=3, detr_round1_only=False,
+    )
+    out_ev = GeoRecViT(sam3, dino, cfg_every)(imgs, class_prompts=prompts, num_rounds=2, top_m_windows=3)
+    assert len(out_ev["round_logits"]) == 2
 
     # 3. Verify lightweight checkpoint save & reload
     ckpt = save_georecvit_links(model, tmp_path, tag="test")

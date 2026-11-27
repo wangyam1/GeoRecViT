@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--top_m_windows", type=int, default=None)
     p.add_argument("--no_dinov3", action="store_true")
     p.add_argument("--no_detr", action="store_true")
+    p.add_argument("--detr_every_round", action="store_true", help="Run full SAM 3 DETR on every round (slower)")
     p.add_argument("--no_inner_link", action="store_true")
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--batch_size", type=int, default=None)
@@ -146,6 +147,7 @@ def main() -> None:
         num_recursive_rounds=num_rounds,
         sparse_top_windows=top_m,
         use_sam3_detr=(not args.no_detr) and bool(m_cfg.get("use_sam3_detr", True)),
+        detr_round1_only=(not args.detr_every_round) and bool(m_cfg.get("detr_round1_only", True)),
         use_dinov3=use_dinov3,
         use_inner_link=(not args.no_inner_link) and bool(m_cfg.get("use_inner_link", True)),
         use_feedback_loop=(num_rounds > 1) and bool(m_cfg.get("use_feedback_loop", True)),
