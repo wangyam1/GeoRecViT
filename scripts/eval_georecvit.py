@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--detr_every_round", action="store_true")
     p.add_argument("--class_chunk_size", type=int, default=2)
     p.add_argument("--max_val_samples", type=int, default=-1)
+    p.add_argument("--tta", action="store_true", help="Enable D4 horizontal/vertical flip TTA")
     p.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
     p.add_argument("--output_json", type=str, default="results/eval_georecvit_sweep.json")
     return p.parse_args()
@@ -136,6 +137,28 @@ def main() -> None:
                         num_rounds=max_r,
                         top_m_windows=top_m,
                     )
+                    if args.tta:
+                        out_h = model(
+                            torch.flip(images, dims=[-1]),
+                            class_prompts=class_prompts,
+                            num_rounds=max_r,
+                            top_m_windows=top_m,
+                        )
+                        out_v = model(
+                            torch.flip(images, dims=[-2]),
+                            class_prompts=class_prompts,
+                            num_rounds=max_r,
+                            top_m_windows=top_m,
+                        )
+                        out["round_logits"] = [
+                            (
+                                out["round_logits"][idx].float()
+                                + torch.flip(out_h["round_logits"][idx].float(), dims=[-1])
+                                + torch.flip(out_v["round_logits"][idx].float(), dims=[-2])
+                            )
+                            / 3.0
+                            for idx in range(len(out["round_logits"]))
+                        ]
                 if device.type == "cuda":
                     torch.cuda.synchronize()
                 t_total += time.perf_counter() - t0

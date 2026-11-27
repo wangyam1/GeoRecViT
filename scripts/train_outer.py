@@ -233,11 +233,28 @@ def main() -> None:
     )
     params = model.trainable_parameters()
     wd = args.weight_decay if args.weight_decay is not None else float(t_cfg.get("weight_decay", 0.01))
+    # Never apply weight decay to 1D/scalar gates, scales, biases, or norm weights
+    decay_params = [p for p in params if p.ndim >= 2]
+    no_decay_params = [p for p in params if p.ndim < 2]
     optimizer = torch.optim.AdamW(
-        params, lr=lr, weight_decay=wd, betas=(0.9, 0.95)
+        [
+            {"params": decay_params, "weight_decay": wd},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ],
+        lr=lr,
+        betas=(0.9, 0.95),
     )
     total_opt_steps = max(1, (epochs * len(train_loader)) // grad_accum)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_opt_steps)
+    warmup_steps = max(1, int(total_opt_steps * float(t_cfg.get("warmup_ratio", 0.08))))
+
+    def _lr_lambda(step: int) -> float:
+        if step < warmup_steps:
+            return float(step + 1) / float(warmup_steps)
+        prog = float(step - warmup_steps) / float(max(1, total_opt_steps - warmup_steps))
+        import math
+        return 0.05 + 0.95 * 0.5 * (1.0 + math.cos(math.pi * min(1.0, prog)))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
     scaler = torch.amp.GradScaler("cuda", enabled=(args.precision == "fp16" and device.type == "cuda"))
 
     class_prompts = ds_cfg["class_prompts"]

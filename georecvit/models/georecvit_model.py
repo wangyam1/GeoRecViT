@@ -49,6 +49,37 @@ class GeoRecViTConfig:
     use_feedback_loop: bool = True
 
 
+class MultiScaleFPNFusion(nn.Module):
+    """Lightweight multi-scale FPN aggregator fusing 288x288, 144x144, and 72x72 SAM 3 FPN levels."""
+
+    def __init__(self, fpn_dim: int = 256) -> None:
+        super().__init__()
+        self.norm0 = nn.GroupNorm(8, fpn_dim)
+        self.proj1 = nn.Sequential(
+            nn.Conv2d(fpn_dim, fpn_dim, kernel_size=1, bias=False),
+            nn.GroupNorm(8, fpn_dim),
+            nn.GELU(),
+        )
+        self.proj2 = nn.Sequential(
+            nn.Conv2d(fpn_dim, fpn_dim, kernel_size=1, bias=False),
+            nn.GroupNorm(8, fpn_dim),
+            nn.GELU(),
+        )
+        self.scale1 = nn.Parameter(torch.tensor(0.3))
+        self.scale2 = nn.Parameter(torch.tensor(0.2))
+
+    def forward(self, fpn_feats: Sequence[torch.Tensor]) -> torch.Tensor:
+        out = self.norm0(fpn_feats[0])
+        H, W = out.shape[-2:]
+        if len(fpn_feats) >= 2:
+            f1 = F.interpolate(self.proj1(fpn_feats[1]), size=(H, W), mode="bilinear", align_corners=False)
+            out = out + self.scale1 * f1
+        if len(fpn_feats) >= 3:
+            f2 = F.interpolate(self.proj2(fpn_feats[2]), size=(H, W), mode="bilinear", align_corners=False)
+            out = out + self.scale2 * f2
+        return out
+
+
 class ConceptCalibrationReadout(nn.Module):
     """Open-vocabulary dual-head calibration combining SAM 3 priors + refined FPN + SAT cues.
 
@@ -65,7 +96,7 @@ class ConceptCalibrationReadout(nn.Module):
         proto_dim: int = 256,
     ) -> None:
         super().__init__()
-        self.fpn_norm = nn.GroupNorm(8, fpn_dim)
+        self.fpn_fusion = MultiScaleFPNFusion(fpn_dim)
         self.sat_to_fpn = nn.Sequential(
             nn.Conv2d(sat_dim, fpn_dim, kernel_size=1, bias=False),
             nn.GroupNorm(8, fpn_dim),
@@ -97,13 +128,13 @@ class ConceptCalibrationReadout(nn.Module):
         self,
         sam3_sem_logits: torch.Tensor,
         sam3_inst_probs: torch.Tensor,
-        fpn_high: torch.Tensor,
+        fpn_feats: Sequence[torch.Tensor],
         sat_feats_grid: Optional[torch.Tensor],
         class_prototypes: torch.Tensor,
     ) -> torch.Tensor:
-        """Fuse SAM 3 dual-head priors with refined ViT + SAT visual logits -> `[B, C, 288, 288]`."""
-        H, W = fpn_high.shape[-2:]
-        fpn_normed = self.fpn_norm(fpn_high)
+        """Fuse SAM 3 dual-head priors with multi-scale refined ViT + SAT logits -> `[B, C, 288, 288]`."""
+        fpn_normed = self.fpn_fusion(fpn_feats)
+        H, W = fpn_normed.shape[-2:]
         if sat_feats_grid is not None:
             sat_map = sat_feats_grid.permute(0, 3, 1, 2).contiguous()
             sat_proj = self.sat_to_fpn(sat_map)
@@ -166,12 +197,11 @@ class SparseResidualRefinementHead(nn.Module):
         )
         self.delta_proto_proj = nn.Conv2d(fpn_dim, proto_dim, kernel_size=1)
         self.delta_cls = nn.Conv2d(fpn_dim, num_classes, kernel_size=1)
-        # Near-zero non-singular init: preserves exact Round-1 anchor at step 0 while
-        # keeping non-zero gradients flowing into refiner, feedback_outer_link, and STE router.
-        nn.init.normal_(self.delta_cls.weight, std=0.005)
+        # Balanced non-zero init: keeps Step-0 clean while delivering strong Stage 2b gradients
+        nn.init.normal_(self.delta_cls.weight, std=0.01)
         nn.init.zeros_(self.delta_cls.bias)
-        self.proto_weight = nn.Parameter(torch.tensor(0.05))
-        self.round_scales = nn.Parameter(torch.full((max_rounds,), 0.1))
+        self.proto_weight = nn.Parameter(torch.tensor(0.35))
+        self.round_scales = nn.Parameter(torch.full((max_rounds,), 0.4))
 
     def forward(
         self,
@@ -551,7 +581,7 @@ class GeoRecViT(nn.Module):
                         logits_r = self.readout(
                             sam3_sem_logits=decode_out.sem_logits,
                             sam3_inst_probs=decode_out.inst_probs,
-                            fpn_high=decode_out.fpn_feats[0],
+                            fpn_feats=decode_out.fpn_feats,
                             sat_feats_grid=f_sat,
                             class_prototypes=class_prototypes,
                         )
@@ -567,16 +597,17 @@ class GeoRecViT(nn.Module):
                     logits_r = self.readout(
                         sam3_sem_logits=decode_out.sem_logits,
                         sam3_inst_probs=decode_out.inst_probs,
-                        fpn_high=decode_out.fpn_feats[0],
+                        fpn_feats=decode_out.fpn_feats,
                         sat_feats_grid=f_sat,
                         class_prototypes=class_prototypes,
                     )
             elif self.sparse_refiner is not None and routing is not None:
                 assert prev_logits is not None and prev_fpn_high is not None and prev_probs is not None
                 assert cached_sat_up is not None
+                cur_fpn_ms = self.readout.fpn_fusion(decode_out.fpn_feats)
                 logits_r = self.sparse_refiner(
                     prev_logits=prev_logits,
-                    fpn_high=decode_out.fpn_feats[0],
+                    fpn_high=cur_fpn_ms,
                     prev_fpn_high=prev_fpn_high,
                     sat_up=cached_sat_up,
                     prev_probs=prev_probs,
@@ -598,14 +629,18 @@ class GeoRecViT(nn.Module):
                 logits_r = self.readout(
                     sam3_sem_logits=decode_out.sem_logits,
                     sam3_inst_probs=decode_out.inst_probs,
-                    fpn_high=decode_out.fpn_feats[0],
+                    fpn_feats=decode_out.fpn_feats,
                     sat_feats_grid=f_sat,
                     class_prototypes=class_prototypes,
                 )
 
             round_logits.append(logits_r)
             prev_decode = decode_out
-            prev_fpn_high = decode_out.fpn_feats[0]
+            if r == 0 and r1_frozen:
+                with torch.no_grad():
+                    prev_fpn_high = self.readout.fpn_fusion(decode_out.fpn_feats)
+            else:
+                prev_fpn_high = self.readout.fpn_fusion(decode_out.fpn_feats)
             prev_logits = logits_r
             prev_probs = F.softmax(logits_r, dim=1)
 

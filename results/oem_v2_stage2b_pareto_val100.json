@@ -1,0 +1,238 @@
+{
+  "dataset": "openearthmap",
+  "params": {
+    "total_params": 1154723164,
+    "trainable_params": 11083814,
+    "frozen_params": 1143639350
+  },
+  "sweeps": [
+    {
+      "top_m_windows": 1,
+      "active_window_ratio": 0.111,
+      "avg_latency_ms_at_max_R": 2240.62,
+      "by_round": {
+        "R=1": {
+          "mIoU": 57.25,
+          "mF1": 72.06,
+          "OA": 73.09,
+          "per_class_IoU": {
+            "bareland": 44.36,
+            "rangeland": 51.55,
+            "developed_space": 44.88,
+            "road": 42.62,
+            "tree": 61.76,
+            "water": 67.37,
+            "agriculture_land": 72.08,
+            "building": 73.35
+          }
+        },
+        "R=2": {
+          "mIoU": 57.27,
+          "mF1": 72.08,
+          "OA": 73.1,
+          "per_class_IoU": {
+            "bareland": 44.46,
+            "rangeland": 51.58,
+            "developed_space": 44.87,
+            "road": 42.62,
+            "tree": 61.77,
+            "water": 67.38,
+            "agriculture_land": 72.11,
+            "building": 73.37
+          }
+        },
+        "R=3": {
+          "mIoU": 57.31,
+          "mF1": 72.12,
+          "OA": 73.11,
+          "per_class_IoU": {
+            "bareland": 44.72,
+            "rangeland": 51.6,
+            "developed_space": 44.84,
+            "road": 42.61,
+            "tree": 61.77,
+            "water": 67.44,
+            "agriculture_land": 72.12,
+            "building": 73.38
+          }
+        }
+      },
+      "active_window_by_round_mIoU": {
+        "R=1": 49.6,
+        "R=2": 49.63,
+        "R=3": 49.74
+      }
+    },
+    {
+      "top_m_windows": 3,
+      "active_window_ratio": 0.333,
+      "avg_latency_ms_at_max_R": 2307.77,
+      "by_round": {
+        "R=1": {
+          "mIoU": 57.25,
+          "mF1": 72.06,
+          "OA": 73.09,
+          "per_class_IoU": {
+            "bareland": 44.36,
+            "rangeland": 51.55,
+            "developed_space": 44.88,
+            "road": 42.62,
+            "tree": 61.76,
+            "water": 67.37,
+            "agriculture_land": 72.08,
+            "building": 73.35
+          }
+        },
+        "R=2": {
+          "mIoU": 57.37,
+          "mF1": 72.17,
+          "OA": 73.13,
+          "per_class_IoU": {
+            "bareland": 45.03,
+            "rangeland": 51.63,
+            "developed_space": 44.87,
+            "road": 42.58,
+            "tree": 61.8,
+            "water": 67.49,
+            "agriculture_land": 72.18,
+            "building": 73.41
+          }
+        },
+        "R=3": {
+          "mIoU": 57.43,
+          "mF1": 72.21,
+          "OA": 73.15,
+          "per_class_IoU": {
+            "bareland": 45.29,
+            "rangeland": 51.7,
+            "developed_space": 44.84,
+            "road": 42.54,
+            "tree": 61.81,
+            "water": 67.53,
+            "agriculture_land": 72.26,
+            "building": 73.45
+          }
+        }
+      },
+      "active_window_by_round_mIoU": {
+        "R=1": 52.28,
+        "R=2": 52.53,
+        "R=3": 52.62
+      }
+    },
+    {
+      "top_m_windows": 5,
+      "active_window_ratio": 0.556,
+      "avg_latency_ms_at_max_R": 2396.31,
+      "by_round": {
+        "R=1": {
+          "mIoU": 57.25,
+          "mF1": 72.06,
+          "OA": 73.09,
+          "per_class_IoU": {
+            "bareland": 44.36,
+            "rangeland": 51.55,
+            "developed_space": 44.88,
+            "road": 42.62,
+            "tree": 61.76,
+            "water": 67.37,
+            "agriculture_land": 72.08,
+            "building": 73.35
+          }
+        },
+        "R=2": {
+          "mIoU": 57.4,
+          "mF1": 72.19,
+          "OA": 73.14,
+          "per_class_IoU": {
+            "bareland": 45.14,
+            "rangeland": 51.66,
+            "developed_space": 44.87,
+            "road": 42.56,
+            "tree": 61.81,
+            "water": 67.48,
+            "agriculture_land": 72.23,
+            "building": 73.44
+          }
+        },
+        "R=3": {
+          "mIoU": 57.45,
+          "mF1": 72.24,
+          "OA": 73.17,
+          "per_class_IoU": {
+            "bareland": 45.39,
+            "rangeland": 51.76,
+            "developed_space": 44.84,
+            "road": 42.5,
+            "tree": 61.84,
+            "water": 67.45,
+            "agriculture_land": 72.36,
+            "building": 73.5
+          }
+        }
+      },
+      "active_window_by_round_mIoU": {
+        "R=1": 53.55,
+        "R=2": 53.78,
+        "R=3": 53.87
+      }
+    },
+    {
+      "top_m_windows": 9,
+      "active_window_ratio": 1.0,
+      "avg_latency_ms_at_max_R": 2570.95,
+      "by_round": {
+        "R=1": {
+          "mIoU": 57.25,
+          "mF1": 72.06,
+          "OA": 73.09,
+          "per_class_IoU": {
+            "bareland": 44.36,
+            "rangeland": 51.55,
+            "developed_space": 44.88,
+            "road": 42.62,
+            "tree": 61.76,
+            "water": 67.37,
+            "agriculture_land": 72.08,
+            "building": 73.35
+          }
+        },
+        "R=2": {
+          "mIoU": 57.38,
+          "mF1": 72.18,
+          "OA": 73.14,
+          "per_class_IoU": {
+            "bareland": 45.05,
+            "rangeland": 51.66,
+            "developed_space": 44.87,
+            "road": 42.5,
+            "tree": 61.81,
+            "water": 67.46,
+            "agriculture_land": 72.25,
+            "building": 73.46
+          }
+        },
+        "R=3": {
+          "mIoU": 57.43,
+          "mF1": 72.21,
+          "OA": 73.18,
+          "per_class_IoU": {
+            "bareland": 45.22,
+            "rangeland": 51.77,
+            "developed_space": 44.85,
+            "road": 42.38,
+            "tree": 61.84,
+            "water": 67.41,
+            "agriculture_land": 72.42,
+            "building": 73.55
+          }
+        }
+      },
+      "active_window_by_round_mIoU": {
+        "R=1": 57.25,
+        "R=2": 57.38,
+        "R=3": 57.43
+      }
+    }
+  ]
+}

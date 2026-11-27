@@ -1,0 +1,118 @@
+[
+  {
+    "epoch": 1,
+    "train_loss": 2.4905,
+    "val_mIoU": 57.37,
+    "val_per_round_mIoU": [
+      57.25,
+      57.32,
+      57.37
+    ],
+    "active_window_per_round_mIoU": [
+      52.22,
+      52.36,
+      52.43
+    ],
+    "avg_val_latency_ms": 2315.87,
+    "val_mF1": 72.17,
+    "val_OA": 73.13,
+    "per_class_IoU": {
+      "bareland": 45.0,
+      "rangeland": 51.66,
+      "developed_space": 44.79,
+      "road": 42.59,
+      "tree": 61.76,
+      "water": 67.49,
+      "agriculture_land": 72.24,
+      "building": 73.43
+    },
+    "elapsed_sec": 675.2
+  },
+  {
+    "epoch": 2,
+    "train_loss": 2.5034,
+    "val_mIoU": 57.43,
+    "val_per_round_mIoU": [
+      57.25,
+      57.37,
+      57.43
+    ],
+    "active_window_per_round_mIoU": [
+      52.28,
+      52.53,
+      52.62
+    ],
+    "avg_val_latency_ms": 2307.89,
+    "val_mF1": 72.21,
+    "val_OA": 73.15,
+    "per_class_IoU": {
+      "bareland": 45.29,
+      "rangeland": 51.7,
+      "developed_space": 44.84,
+      "road": 42.54,
+      "tree": 61.81,
+      "water": 67.53,
+      "agriculture_land": 72.26,
+      "building": 73.45
+    },
+    "elapsed_sec": 1349.6
+  },
+  {
+    "epoch": 3,
+    "train_loss": 2.4888,
+    "val_mIoU": 57.41,
+    "val_per_round_mIoU": [
+      57.25,
+      57.37,
+      57.41
+    ],
+    "active_window_per_round_mIoU": [
+      52.11,
+      52.35,
+      52.4
+    ],
+    "avg_val_latency_ms": 2309.47,
+    "val_mF1": 72.19,
+    "val_OA": 73.16,
+    "per_class_IoU": {
+      "bareland": 45.07,
+      "rangeland": 51.82,
+      "developed_space": 44.84,
+      "road": 42.51,
+      "tree": 61.8,
+      "water": 67.43,
+      "agriculture_land": 72.35,
+      "building": 73.45
+    },
+    "elapsed_sec": 2024.3
+  },
+  {
+    "epoch": 4,
+    "train_loss": 2.4842,
+    "val_mIoU": 57.42,
+    "val_per_round_mIoU": [
+      57.25,
+      57.37,
+      57.42
+    ],
+    "active_window_per_round_mIoU": [
+      52.24,
+      52.48,
+      52.55
+    ],
+    "avg_val_latency_ms": 2307.23,
+    "val_mF1": 72.2,
+    "val_OA": 73.16,
+    "per_class_IoU": {
+      "bareland": 45.14,
+      "rangeland": 51.83,
+      "developed_space": 44.85,
+      "road": 42.48,
+      "tree": 61.8,
+      "water": 67.44,
+      "agriculture_land": 72.35,
+      "building": 73.45
+    },
+    "elapsed_sec": 2698.5
+  }
+]
