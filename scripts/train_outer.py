@@ -45,6 +45,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max_train_samples", type=int, default=-1)
     p.add_argument("--max_val_samples", type=int, default=-1)
     p.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
+    p.add_argument("--class_chunk_size", type=int, default=2, help="Classes per DETR chunk to cap VRAM")
     return p.parse_args()
 
 
@@ -113,11 +114,18 @@ def main() -> None:
         enable_segmentation=True,
         enable_inst_interactivity=False,
     )
+    if use_amp:
+        # Cast heavy frozen backbone Linear/Conv/Embedding weights to fp16/bf16 (-1.5 GB VRAM)
+        # while keeping norms and DETR decoder (which disables autocast in FFN) in fp32.
+        for mod in sam3_model.backbone.modules():
+            if isinstance(mod, (torch.nn.Linear, torch.nn.Conv2d, torch.nn.ConvTranspose2d, torch.nn.Embedding)):
+                mod.to(dtype=amp_dtype)
     sam3_wrapper = SAM3RecursiveBackbone(
         sam3_model=sam3_model,
         split_block_idx=int(m_cfg.get("split_block_idx", 24)),
         resolution=int(ds_cfg.get("sam3_resolution", 1008)),
         use_grad_checkpoint=True,
+        class_chunk_size=args.class_chunk_size,
     )
     dinov3 = (
         DINOv3Expert(

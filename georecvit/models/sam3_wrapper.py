@@ -95,6 +95,7 @@ class SAM3RecursiveBackbone(nn.Module):
         split_block_idx: int = 24,
         resolution: int = 1008,
         use_grad_checkpoint: bool = True,
+        class_chunk_size: int = 2,
     ) -> None:
         super().__init__()
         _enable_grad_safe_sam3_mlp()
@@ -111,6 +112,7 @@ class SAM3RecursiveBackbone(nn.Module):
         self.split_block_idx = split_block_idx
         self.resolution = resolution
         self.use_grad_checkpoint = use_grad_checkpoint
+        self.class_chunk_size = max(1, int(class_chunk_size))
 
         self.vit = self.sam3.backbone.vision_backbone.trunk
         self.neck = self.sam3.backbone.vision_backbone
@@ -172,7 +174,7 @@ class SAM3RecursiveBackbone(nn.Module):
         from sam3.model.vitdet import get_abs_pos
 
         x = self.preprocess_images(images_01)
-        param_dtype = next(self.vit.parameters()).dtype
+        param_dtype = self.vit.patch_embed.proj.weight.dtype
         x = x.to(dtype=param_dtype)
 
         x = self.vit.patch_embed(x)  # [B, 72, 72, 1024]
@@ -283,76 +285,98 @@ class SAM3RecursiveBackbone(nn.Module):
 
         from sam3.model.data_misc import FindStage
 
-        # Batch all (b, c) pairs in a single forward pass: total N = B * C
-        img_ids = torch.arange(B, device=device, dtype=torch.long).repeat_interleave(C)
-        text_ids = torch.arange(C, device=device, dtype=torch.long).repeat(B)
-        find_input = FindStage(
-            img_ids=img_ids,
-            text_ids=text_ids,
-            input_boxes=None,
-            input_boxes_mask=None,
-            input_boxes_label=None,
-            input_points=None,
-            input_points_mask=None,
-        )
-        backbone_out = {
-            "vision_features": fpn_feats[-1],
-            "vision_pos_enc": fpn_pos,
-            "backbone_fpn": fpn_feats,
-            "language_features": text_out["language_features"],
-            "language_mask": text_out["language_mask"],
-            "language_embeds": text_out["language_embeds"],
-        }
-        geo_prompt = self.sam3._get_dummy_prompt(num_prompts=B * C)
+        # Process classes in memory-friendly chunks (e.g. 2 classes/chunk) so PixelDecoder
+        # peak activations stay <200MB even on 16GB T4 GPUs across R=3 recursive rounds.
+        chunk_sz = min(self.class_chunk_size, C)
+        sem_chunks: List[torch.Tensor] = []
+        inst_chunks: List[torch.Tensor] = []
+        pres_chunks: List[torch.Tensor] = []
+        pres_logit_chunks: List[torch.Tensor] = []
+        enc_chunks: List[torch.Tensor] = []
 
-        def _decode_fn(f0: torch.Tensor, f1: torch.Tensor, f2: torch.Tensor):
-            bb_local = dict(backbone_out)
-            bb_local["backbone_fpn"] = [f0, f1, f2]
-            bb_local["vision_features"] = f2
-            out = self.sam3.forward_grounding(
-                backbone_out=bb_local,
-                find_input=find_input,
-                find_target=None,
-                geometric_prompt=geo_prompt,
+        for c_start in range(0, C, chunk_sz):
+            c_end = min(c_start + chunk_sz, C)
+            c_cur = c_end - c_start
+            img_ids = torch.arange(B, device=device, dtype=torch.long).repeat_interleave(c_cur)
+            text_ids = torch.arange(c_start, c_end, device=device, dtype=torch.long).repeat(B)
+            find_input = FindStage(
+                img_ids=img_ids,
+                text_ids=text_ids,
+                input_boxes=None,
+                input_boxes_mask=None,
+                input_boxes_label=None,
+                input_points=None,
+                input_points_mask=None,
             )
-            return (
-                out["semantic_seg"],            # [B*C, 1, 288, 288]
-                out["pred_masks"],              # [B*C, 200, 288, 288]
-                out["pred_logits"],             # [B*C, 200, 1]
-                out["presence_logit_dec"],      # [B*C, 1]
-                out["encoder_hidden_states"],   # [72*72, B*C, 256]
+            geo_prompt = self.sam3._get_dummy_prompt(num_prompts=B * c_cur)
+
+            def _decode_chunk(
+                f0: torch.Tensor,
+                f1: torch.Tensor,
+                f2: torch.Tensor,
+                _fi=find_input,
+                _gp=geo_prompt,
+            ):
+                bb_local = {
+                    "vision_features": f2,
+                    "vision_pos_enc": fpn_pos,
+                    "backbone_fpn": [f0, f1, f2],
+                    "language_features": text_out["language_features"],
+                    "language_mask": text_out["language_mask"],
+                    "language_embeds": text_out["language_embeds"],
+                }
+                out = self.sam3.forward_grounding(
+                    backbone_out=bb_local,
+                    find_input=_fi,
+                    find_target=None,
+                    geometric_prompt=_gp,
+                )
+                return (
+                    out["semantic_seg"],            # [B*c_cur, 1, 288, 288]
+                    out["pred_masks"],              # [B*c_cur, 200, 288, 288]
+                    out["pred_logits"],             # [B*c_cur, 200, 1]
+                    out["presence_logit_dec"],      # [B*c_cur, 1]
+                    out["encoder_hidden_states"],   # [72*72, B*c_cur, 256]
+                )
+
+            if self.use_grad_checkpoint and any(f.requires_grad for f in fpn_feats):
+                sem_seg, pred_masks, pred_logits, pres_logit, enc_states = ckpt.checkpoint(
+                    _decode_chunk, fpn_feats[0], fpn_feats[1], fpn_feats[2], use_reentrant=False
+                )
+            else:
+                sem_seg, pred_masks, pred_logits, pres_logit, enc_states = _decode_chunk(
+                    fpn_feats[0], fpn_feats[1], fpn_feats[2]
+                )
+
+            sem_c = sem_seg.squeeze(1).view(B, c_cur, H_hi, W_hi)
+            pres_logit_c = pres_logit.view(B, c_cur)
+            pres_prob_c = pres_logit_c.sigmoid()
+            q_scores = pred_logits.sigmoid().view(B, c_cur, -1) * pres_prob_c.unsqueeze(-1)
+            top_k = min(16, q_scores.shape[-1])
+            top_scores, top_idx = torch.topk(q_scores, k=top_k, dim=-1)
+            masks_bc = pred_masks.view(B, c_cur, -1, H_hi, W_hi)
+            gather_m_idx = top_idx[:, :, :, None, None].expand(B, c_cur, top_k, H_hi, W_hi)
+            top_masks = torch.gather(masks_bc, dim=2, index=gather_m_idx).sigmoid()
+            inst_c = (top_masks * top_scores[:, :, :, None, None]).amax(dim=2)
+            enc_c = (
+                enc_states.permute(1, 2, 0)
+                .contiguous()
+                .view(B, c_cur, self.d_model, H_low, W_low)
             )
 
-        if self.use_grad_checkpoint and any(f.requires_grad for f in fpn_feats):
-            sem_seg, pred_masks, pred_logits, pres_logit, enc_states = ckpt.checkpoint(
-                _decode_fn, fpn_feats[0], fpn_feats[1], fpn_feats[2], use_reentrant=False
-            )
-        else:
-            sem_seg, pred_masks, pred_logits, pres_logit, enc_states = _decode_fn(
-                fpn_feats[0], fpn_feats[1], fpn_feats[2]
-            )
+            sem_chunks.append(sem_c)
+            inst_chunks.append(inst_c)
+            pres_chunks.append(pres_prob_c)
+            pres_logit_chunks.append(pres_logit_c)
+            enc_chunks.append(enc_c)
 
-        # Reshape semantic head output: [B, C, 288, 288]
-        sem_logits = sem_seg.squeeze(1).view(B, C, H_hi, W_hi)
+        sem_logits = torch.cat(sem_chunks, dim=1)               # [B, C, 288, 288]
+        inst_probs = torch.cat(inst_chunks, dim=1)              # [B, C, 288, 288]
+        presence_probs = torch.cat(pres_chunks, dim=1)          # [B, C]
+        pres_logits_all = torch.cat(pres_logit_chunks, dim=1)   # [B, C]
+        enc_map = torch.cat(enc_chunks, dim=1)                  # [B, C, 256, 72, 72]
 
-        # Compute SegEarth-OV3-style presence-gated instance probability map: [B, C, 288, 288]
-        presence_probs = pres_logit.sigmoid().view(B, C)  # [B, C]
-        q_scores = pred_logits.sigmoid().view(B, C, -1) * presence_probs.unsqueeze(-1)
-        # Soft-weighted top-K instance aggregation (differentiable & memory-friendly)
-        top_k = min(16, q_scores.shape[-1])
-        top_scores, top_idx = torch.topk(q_scores, k=top_k, dim=-1)  # [B, C, K]
-        masks_bc = pred_masks.view(B, C, -1, H_hi, W_hi)
-        gather_m_idx = top_idx[:, :, :, None, None].expand(B, C, top_k, H_hi, W_hi)
-        top_masks = torch.gather(masks_bc, dim=2, index=gather_m_idx).sigmoid()
-        inst_probs = (top_masks * top_scores[:, :, :, None, None]).amax(dim=2)  # [B, C, 288, 288]
-
-        # Aggregate prompt-conditioned encoder hidden states weighted by class presence -> [B, 256, 72, 72]
-        enc_map = (
-            enc_states.permute(1, 2, 0)
-            .contiguous()
-            .view(B, C, self.d_model, H_low, W_low)
-        )
-        w_pres = F.softmax(pres_logit.view(B, C), dim=1)[:, :, None, None, None]
+        w_pres = F.softmax(pres_logits_all, dim=1)[:, :, None, None, None]
         decoder_context = (enc_map * w_pres).sum(dim=1)  # [B, 256, 72, 72]
 
         return SAM3DecodeOutput(
