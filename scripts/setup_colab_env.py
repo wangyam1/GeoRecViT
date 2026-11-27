@@ -89,7 +89,7 @@ def main() -> None:
 
     # 2. LoveDA Official Zenodo Val.zip (+ optional Train.zip when DOWNLOAD_LOVEDA_TRAIN=1)
     loveda_dir = DATA_DIR / "loveda"
-    if not (loveda_dir / "Val").exists():
+    if os.environ.get("DOWNLOAD_LOVEDA", "1") == "1" and not (loveda_dir / "Val").exists():
         fast_download("https://zenodo.org/records/5706578/files/Val.zip?download=1", loveda_dir, "Val.zip")
         run(["unzip", "-q", "-o", str(loveda_dir / "Val.zip"), "-d", str(loveda_dir)])
         (loveda_dir / "Val.zip").unlink(missing_ok=True)

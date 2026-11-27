@@ -10,7 +10,7 @@ where each round's segmentation loss combines:
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -76,6 +76,7 @@ class MultiRoundSegmentationLoss(nn.Module):
         ce_weight: float = 1.0,
         dice_weight: float = 1.0,
         focal_weight: float = 0.5,
+        active_refine_weight: float = 0.5,
     ) -> None:
         super().__init__()
         self.ignore_index = ignore_index
@@ -83,11 +84,11 @@ class MultiRoundSegmentationLoss(nn.Module):
         self.ce_weight = ce_weight
         self.dice_weight = dice_weight
         self.focal_weight = focal_weight
+        self.active_refine_weight = active_refine_weight
 
-    def single_round_loss(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def _resize_targets(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         if logits.shape[-2:] != targets.shape[-2:]:
-            # Downsample targets with nearest neighbor to match 288x288 seg head efficiently
-            targets_rs = (
+            return (
                 F.interpolate(
                     targets.unsqueeze(1).float(),
                     size=logits.shape[-2:],
@@ -96,8 +97,10 @@ class MultiRoundSegmentationLoss(nn.Module):
                 .squeeze(1)
                 .long()
             )
-        else:
-            targets_rs = targets
+        return targets
+
+    def single_round_loss(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        targets_rs = self._resize_targets(logits, targets)
 
         loss = torch.zeros((), device=logits.device, dtype=torch.float32)
         if self.ce_weight > 0:
@@ -116,10 +119,30 @@ class MultiRoundSegmentationLoss(nn.Module):
             )
         return loss
 
+    def active_window_loss(
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        active_mask_hi: torch.Tensor,
+    ) -> torch.Tensor:
+        """Focused CE + Focal refinement loss strictly inside routed uncertain windows."""
+        targets_rs = self._resize_targets(logits, targets)
+        mask_bool = active_mask_hi.squeeze(1) > 0.5
+        masked_targets = torch.where(
+            mask_bool, targets_rs, torch.full_like(targets_rs, self.ignore_index)
+        )
+        valid = masked_targets != self.ignore_index
+        if not valid.any():
+            return logits.sum() * 0.0
+        ce = F.cross_entropy(logits.float(), masked_targets, ignore_index=self.ignore_index)
+        foc = multiclass_focal_loss(logits, masked_targets, ignore_index=self.ignore_index)
+        return ce + 0.5 * foc
+
     def forward(
         self,
         round_logits: List[torch.Tensor],
         targets: torch.Tensor,
+        active_masks_hi: Optional[List[torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
         per_round = [self.single_round_loss(lg, targets) for lg in round_logits]
         final_loss = per_round[-1]
@@ -130,9 +153,25 @@ class MultiRoundSegmentationLoss(nn.Module):
             aux_loss = torch.zeros_like(final_loss)
             total = final_loss
 
+        active_loss = torch.zeros_like(final_loss)
+        if (
+            active_masks_hi
+            and len(round_logits) > 1
+            and self.active_refine_weight > 0
+        ):
+            act_terms = [
+                self.active_window_loss(round_logits[i + 1], targets, m)
+                for i, m in enumerate(active_masks_hi)
+                if (i + 1) < len(round_logits)
+            ]
+            if act_terms:
+                active_loss = torch.stack(act_terms).mean()
+                total = total + self.active_refine_weight * active_loss
+
         return {
             "loss": total,
             "final_round_loss": final_loss.detach(),
             "first_round_loss": per_round[0].detach(),
             "aux_round_loss": aux_loss.detach(),
+            "active_window_loss": active_loss.detach(),
         }

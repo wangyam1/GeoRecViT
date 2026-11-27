@@ -130,6 +130,85 @@ class ConceptCalibrationReadout(nn.Module):
         )
 
 
+class SparseResidualRefinementHead(nn.Module):
+    """Explicit differential residual refinement head for recursive Rounds r >= 2.
+
+    Computes a localized logit correction strictly inside routed uncertain windows:
+        Z^(r) = Z^(r-1) + g_r * R_phi(F_fpn^(r), dF_fpn^(r), F_sat, P^(r-1), U^(r-1)) * M_active^(r)
+    where `dF_fpn^(r) = F_fpn^(r) - F_fpn^(r-1)` captures the top-down feature shift
+    produced by re-evaluating frozen late PE-ViT blocks under feedback tokens.
+    Because `M_active^(r)` is an STE binary mask, confident regions remain 100%
+    invariant while the router learns end-to-end which windows benefit most from recursion.
+    """
+
+    def __init__(
+        self,
+        num_classes: int,
+        fpn_dim: int = 256,
+        proto_dim: int = 256,
+        max_rounds: int = 6,
+    ) -> None:
+        super().__init__()
+        self.fpn_norm = nn.GroupNorm(8, fpn_dim)
+        self.delta_norm = nn.GroupNorm(8, fpn_dim)
+        in_ch = fpn_dim * 3 + num_classes + 2
+        self.fuse = nn.Sequential(
+            nn.Conv2d(in_ch, fpn_dim, kernel_size=1, bias=False),
+            nn.GroupNorm(8, fpn_dim),
+            nn.GELU(),
+            nn.Conv2d(fpn_dim, fpn_dim, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(8, fpn_dim),
+            nn.GELU(),
+            nn.Conv2d(fpn_dim, fpn_dim, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(8, fpn_dim),
+            nn.GELU(),
+        )
+        self.delta_proto_proj = nn.Conv2d(fpn_dim, proto_dim, kernel_size=1)
+        self.delta_cls = nn.Conv2d(fpn_dim, num_classes, kernel_size=1)
+        # Small non-zero init on output convs + round scale avoids zero-gradient saddle points
+        nn.init.normal_(self.delta_cls.weight, std=0.01)
+        nn.init.zeros_(self.delta_cls.bias)
+        self.proto_weight = nn.Parameter(torch.tensor(2.0))
+        self.round_scales = nn.Parameter(torch.full((max_rounds,), 0.25))
+
+    def forward(
+        self,
+        prev_logits: torch.Tensor,
+        fpn_high: torch.Tensor,
+        prev_fpn_high: torch.Tensor,
+        sat_up: torch.Tensor,
+        prev_probs: torch.Tensor,
+        entropy_map: torch.Tensor,
+        disagreement_map: torch.Tensor,
+        active_mask_grid: torch.Tensor,
+        class_prototypes: torch.Tensor,
+        round_idx: int,
+    ) -> torch.Tensor:
+        """Refine `prev_logits` `[B, C, H, W]` inside STE-routed windows `[B, 1, H, W]`."""
+        H, W = fpn_high.shape[-2:]
+        fpn_n = self.fpn_norm(fpn_high)
+        dfpn_n = self.delta_norm(fpn_high - prev_fpn_high)
+
+        ent_hi = F.interpolate(entropy_map.to(fpn_n.dtype), size=(H, W), mode="bilinear", align_corners=False)
+        dis_hi = F.interpolate(disagreement_map.to(fpn_n.dtype), size=(H, W), mode="bilinear", align_corners=False)
+        # Upsample STE active mask with nearest neighbor so exact 0/1 window boundaries & STE grads persist
+        mask_hi = F.interpolate(
+            active_mask_grid.permute(0, 3, 1, 2).float(), size=(H, W), mode="nearest"
+        )
+
+        x = torch.cat([fpn_n, dfpn_n, sat_up.to(fpn_n.dtype), prev_probs.to(fpn_n.dtype), ent_hi, dis_hi], dim=1)
+        h = self.fuse(x)
+        vis_emb = F.normalize(self.delta_proto_proj(h).float(), dim=1, eps=1e-6)
+        proto = F.normalize(class_prototypes.float().to(device=h.device), dim=-1, eps=1e-6)
+        delta_proto = torch.einsum("bchw,kc->bkhw", vis_emb, proto) * self.proto_weight.float()
+        delta_cls = self.delta_cls(h).float()
+
+        r_idx = min(max(round_idx, 0), self.round_scales.shape[0] - 1)
+        scale = self.round_scales[r_idx].float()
+        delta_logits = scale * (delta_cls + delta_proto)
+        return prev_logits.float() + delta_logits * mask_hi
+
+
 class GeoRecViT(nn.Module):
     """Full GeoRecViT closed-loop architecture with frozen SAM 3 + frozen DINOv3-SAT."""
 
@@ -184,7 +263,7 @@ class GeoRecViT(nn.Module):
             sat_dim=config.sat_dim,
         )
 
-        # 5. Text-anchored Open-Vocabulary Concept Calibration Readout
+        # 5. Text-anchored Open-Vocabulary Concept Calibration Readout (Round 1 anchor)
         self.readout = ConceptCalibrationReadout(
             num_classes=config.num_classes,
             fpn_dim=config.decoder_dim,
@@ -192,8 +271,19 @@ class GeoRecViT(nn.Module):
             proto_dim=config.decoder_dim,
         )
 
+        # 6. Sparse Differential Residual Refinement Head (Rounds r >= 2 error correction)
+        self.sparse_refiner = (
+            SparseResidualRefinementHead(
+                num_classes=config.num_classes,
+                fpn_dim=config.decoder_dim,
+                proto_dim=config.decoder_dim,
+            )
+            if config.use_feedback_loop
+            else None
+        )
+
     def trainable_modules(self) -> Dict[str, nn.Module]:
-        """Return dict of ONLY the lightweight trainable modules (~10-15M params)."""
+        """Return dict of ONLY the lightweight trainable modules (~10M params)."""
         mods: Dict[str, nn.Module] = {
             "router": self.router,
             "readout": self.readout,
@@ -204,6 +294,8 @@ class GeoRecViT(nn.Module):
             mods["feedback_outer_link"] = self.feedback_outer_link
         if self.inner_link is not None:
             mods["inner_link"] = self.inner_link
+        if self.sparse_refiner is not None:
+            mods["sparse_refiner"] = self.sparse_refiner
         return mods
 
     def trainable_parameters(self) -> List[nn.Parameter]:
@@ -316,14 +408,19 @@ class GeoRecViT(nn.Module):
         cur_mid = base_mid
 
         round_logits: List[torch.Tensor] = []
+        active_masks_hi: List[torch.Tensor] = []
         active_ratios: List[float] = []
         routing_history: List[RoutingOutput] = []
 
         prev_pre_global: Optional[torch.Tensor] = None
         prev_decode = None
         cached_detr = None
+        prev_fpn_high: Optional[torch.Tensor] = None
+        prev_logits: Optional[torch.Tensor] = None
         prev_probs: Optional[torch.Tensor] = None
+        cached_sat_up: Optional[torch.Tensor] = None
         sam3_raw_logits: Optional[torch.Tensor] = None
+        routing: Optional[RoutingOutput] = None
 
         for r in range(R):
             if r == 0:
@@ -404,16 +501,58 @@ class GeoRecViT(nn.Module):
 
             if r == 0:
                 sam3_raw_logits = decode_out.sem_logits.detach()
+                H_hi, W_hi = decode_out.fpn_feats[0].shape[-2:]
+                if f_sat is not None:
+                    sat_proj = self.readout.sat_to_fpn(f_sat.permute(0, 3, 1, 2).contiguous())
+                    cached_sat_up = F.interpolate(
+                        sat_proj, size=(H_hi, W_hi), mode="bilinear", align_corners=False
+                    )
+                else:
+                    cached_sat_up = torch.zeros_like(decode_out.fpn_feats[0])
 
-            logits_r = self.readout(
-                sam3_sem_logits=decode_out.sem_logits,
-                sam3_inst_probs=decode_out.inst_probs,
-                fpn_high=decode_out.fpn_feats[0],
-                sat_feats_grid=f_sat,
-                class_prototypes=class_prototypes,
-            )
+                logits_r = self.readout(
+                    sam3_sem_logits=decode_out.sem_logits,
+                    sam3_inst_probs=decode_out.inst_probs,
+                    fpn_high=decode_out.fpn_feats[0],
+                    sat_feats_grid=f_sat,
+                    class_prototypes=class_prototypes,
+                )
+            elif self.sparse_refiner is not None and routing is not None:
+                assert prev_logits is not None and prev_fpn_high is not None and prev_probs is not None
+                assert cached_sat_up is not None
+                logits_r = self.sparse_refiner(
+                    prev_logits=prev_logits,
+                    fpn_high=decode_out.fpn_feats[0],
+                    prev_fpn_high=prev_fpn_high,
+                    sat_up=cached_sat_up,
+                    prev_probs=prev_probs,
+                    entropy_map=routing.entropy_map,
+                    disagreement_map=routing.disagreement_map,
+                    active_mask_grid=routing.active_mask,
+                    class_prototypes=class_prototypes,
+                    round_idx=r,
+                )
+                H_hi, W_hi = decode_out.fpn_feats[0].shape[-2:]
+                active_masks_hi.append(
+                    F.interpolate(
+                        routing.active_mask.permute(0, 3, 1, 2).detach().float(),
+                        size=(H_hi, W_hi),
+                        mode="nearest",
+                    )
+                )
+            else:
+                logits_r = self.readout(
+                    sam3_sem_logits=decode_out.sem_logits,
+                    sam3_inst_probs=decode_out.inst_probs,
+                    fpn_high=decode_out.fpn_feats[0],
+                    sat_feats_grid=f_sat,
+                    class_prototypes=class_prototypes,
+                )
+
             round_logits.append(logits_r)
             prev_decode = decode_out
+            prev_fpn_high = decode_out.fpn_feats[0]
+            prev_logits = logits_r
             prev_probs = F.softmax(logits_r, dim=1)
 
         out: Dict[str, object] = {
@@ -421,6 +560,7 @@ class GeoRecViT(nn.Module):
             "final_logits": round_logits[-1],
             "sam3_raw_logits": sam3_raw_logits,
             "active_ratios": active_ratios,
+            "active_masks_hi": active_masks_hi,
         }
         if return_routing:
             out["routing_history"] = routing_history

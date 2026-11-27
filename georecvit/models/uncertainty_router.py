@@ -35,8 +35,9 @@ class RoutingOutput:
     disagreement_map: torch.Tensor    # [B, 1, H, W] normalized in [0, 1]
     uncertainty_map: torch.Tensor     # [B, 1, H, W] combined uncertainty score
     window_scores: torch.Tensor       # [B, num_win] mean+max score per 24x24 window
+    soft_window_gates: torch.Tensor   # [B, num_win] differentiable soft window gates
     selected_indices: torch.Tensor    # [B, M] indices of selected windows in [0, num_win)
-    active_mask: torch.Tensor         # [B, H, W, 1] binary mask of routed windows
+    active_mask: torch.Tensor         # [B, H, W, 1] STE binary mask (exact 0/1 fwd, smooth bwd)
     active_ratio: float               # M / num_win
 
 
@@ -63,6 +64,7 @@ class UncertaintyWindowRouter(nn.Module):
         # Learnable mixing weights [entropy, disagreement] + [mean_pool, max_pool]
         self.uncertainty_logits = nn.Parameter(torch.tensor([0.5, 0.5]))
         self.pool_mix_logit = nn.Parameter(torch.tensor(0.0))  # sigmoid(0) = 0.5
+        self.gate_sharpness = 8.0
 
     @staticmethod
     def compute_normalized_entropy(probs: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -141,15 +143,26 @@ class UncertaintyWindowRouter(nn.Module):
 
         _, selected_indices = torch.topk(window_scores, k=m, dim=-1, largest=True, sorted=True)
 
-        # Build binary window mask [B, H, W, 1]
-        win_mask = torch.zeros((B, num_windows), device=pe_feats.device, dtype=pe_feats.dtype)
-        win_mask.scatter_(1, selected_indices, 1.0)
+        # Build Straight-Through Estimator (STE) binary window mask [B, H, W, 1]:
+        # Forward pass is strictly sparse {0, 1}; backward pass delivers smooth gradients
+        # into `uncertainty_logits`, `pool_mix_logit`, `pe_proj`, and `sat_proj`.
+        hard_win_mask = torch.zeros((B, num_windows), device=pe_feats.device, dtype=torch.float32)
+        hard_win_mask.scatter_(1, selected_indices, 1.0)
+        sorted_scores, _ = torch.sort(window_scores.float(), dim=-1, descending=True)
+        if m < num_windows:
+            thresh = 0.5 * (sorted_scores[:, m - 1 : m] + sorted_scores[:, m : m + 1]).detach()
+        else:
+            thresh = (sorted_scores[:, -1:] - 0.5).detach()
+        soft_win_gates = torch.sigmoid((window_scores.float() - thresh) * self.gate_sharpness)
+        ste_win_mask = (hard_win_mask - soft_win_gates.detach()) + soft_win_gates
+
         active_mask = (
-            win_mask.view(B, gh, gw, 1, 1)
+            ste_win_mask.view(B, gh, gw, 1, 1)
             .expand(B, gh, gw, ws, ws)
             .permute(0, 1, 3, 2, 4)
             .reshape(B, H, W, 1)
             .contiguous()
+            .to(dtype=pe_feats.dtype)
         )
 
         return RoutingOutput(
@@ -157,6 +170,7 @@ class UncertaintyWindowRouter(nn.Module):
             disagreement_map=disagreement_map,
             uncertainty_map=uncertainty_map,
             window_scores=window_scores,
+            soft_window_gates=soft_win_gates,
             selected_indices=selected_indices,
             active_mask=active_mask,
             active_ratio=float(m) / float(num_windows),

@@ -198,21 +198,26 @@ def test_georecvit_inner_and_outer_end_to_end(tmp_path: Path) -> None:
     assert len(out["round_logits"]) == 3
     assert out["final_logits"].shape == (2, 7, 24, 24)
     assert out["active_ratios"] == [1.0, 3.0 / 9.0, 3.0 / 9.0]
-    # Verify multi-round outputs actually evolve across R=1 -> 2 -> 3 at default init
-    diff_12 = (out["round_logits"][1] - out["round_logits"][0]).abs().max().item()
+    # Verify multi-round outputs evolve inside active windows AND stay strictly invariant outside!
+    diff_12_map = (out["round_logits"][1] - out["round_logits"][0]).abs()
+    act_mask_1 = out["active_masks_hi"][0]  # [B, 1, 24, 24]
+    assert diff_12_map[act_mask_1.expand_as(diff_12_map) > 0.5].max().item() > 1e-5
+    assert diff_12_map[act_mask_1.expand_as(diff_12_map) < 0.5].max().item() < 1e-6
     diff_23 = (out["round_logits"][2] - out["round_logits"][1]).abs().max().item()
-    assert diff_12 > 1e-5 and diff_23 > 1e-5, f"Rounds identical: diff_12={diff_12}, diff_23={diff_23}"
+    assert diff_23 > 1e-5, f"Round 3 identical to Round 2: diff_23={diff_23}"
 
     criterion = MultiRoundSegmentationLoss(ignore_index=255)
-    loss_dict = criterion(out["round_logits"], masks)
+    loss_dict = criterion(out["round_logits"], masks, active_masks_hi=out["active_masks_hi"])
     loss_dict["loss"].backward()
 
-    # Verify gradients reach ALL trainable recursive bridges through frozen late ViT blocks!
+    # Verify gradients reach EVERY SINGLE trainable module — INCLUDING STE router!
     for name, mod in model.trainable_modules().items():
-        if name == "router":
-            continue  # top-k indices are discrete; router weights enter via entropy/disagreement inputs
         has_grad = any(p.grad is not None and p.grad.abs().sum().item() > 0 for p in mod.parameters())
         assert has_grad, f"Module {name} did not receive gradients!"
+    assert model.router.uncertainty_logits.grad is not None
+    assert model.router.uncertainty_logits.grad.abs().sum().item() > 0
+    assert model.router.pool_mix_logit.grad is not None
+    assert model.router.pool_mix_logit.grad.abs().item() > 0
 
     # Verify frozen backbones remain strictly untouched
     assert all(p.grad is None for p in sam3.parameters())

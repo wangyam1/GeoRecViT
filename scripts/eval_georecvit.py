@@ -118,6 +118,7 @@ def main() -> None:
 
     for top_m in args.windows_list:
         meters = {r: SegmentationMeter(len(class_names), class_names, ignore_index) for r in args.rounds_list}
+        active_meters = {r: SegmentationMeter(len(class_names), class_names, ignore_index) for r in args.rounds_list}
         t_total = 0.0
         n_img = 0
 
@@ -140,18 +141,28 @@ def main() -> None:
                 t_total += time.perf_counter() - t0
                 n_img += images.shape[0]
 
+                union_active = None
+                if out.get("active_masks_hi"):
+                    u = torch.stack(out["active_masks_hi"], dim=0).amax(dim=0)
+                    u_up = F.interpolate(u, size=masks.shape[-2:], mode="nearest").squeeze(1) > 0.5
+                    union_active = torch.where(u_up, masks, torch.full_like(masks, ignore_index))
+
                 for r in args.rounds_list:
                     lg = out["round_logits"][r - 1]
                     lg_up = F.interpolate(
                         lg.float(), size=masks.shape[-2:], mode="bilinear", align_corners=False
                     )
-                    meters[r].update(lg_up.argmax(dim=1), masks)
+                    pred = lg_up.argmax(dim=1)
+                    meters[r].update(pred, masks)
+                    if union_active is not None:
+                        active_meters[r].update(pred, union_active)
 
         entry = {
             "top_m_windows": top_m,
             "active_window_ratio": round(top_m / 9.0, 3),
             "avg_latency_ms_at_max_R": round(1000.0 * t_total / max(n_img, 1), 2),
             "by_round": {f"R={r}": meters[r].compute() for r in args.rounds_list},
+            "active_window_by_round_mIoU": {f"R={r}": active_meters[r].compute()["mIoU"] for r in args.rounds_list},
         }
         results["sweeps"].append(entry)
         print(json.dumps(entry, indent=2), flush=True)

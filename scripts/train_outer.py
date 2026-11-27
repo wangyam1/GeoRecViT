@@ -12,8 +12,10 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import random
 import time
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -47,7 +49,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max_val_samples", type=int, default=-1)
     p.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
     p.add_argument("--class_chunk_size", type=int, default=2, help="Classes per DETR chunk to cap VRAM")
+    p.add_argument("--seed", type=int, default=42, help="Deterministic seed for fair controlled baselines")
     return p.parse_args()
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 @torch.no_grad()
@@ -65,9 +76,19 @@ def evaluate(
 ) -> dict:
     model.eval()
     meters = [SegmentationMeter(len(class_names), class_names, ignore_index) for _ in range(num_rounds)]
+    active_meters = (
+        [SegmentationMeter(len(class_names), class_names, ignore_index) for _ in range(num_rounds)]
+        if num_rounds > 1
+        else None
+    )
+    t_total = 0.0
+    n_img = 0
     for batch in tqdm(val_loader, desc=f"Val(R={num_rounds},M={top_m_windows})", leave=False):
         images = batch["image"].to(device, non_blocking=True)
         masks = batch["mask"].to(device, non_blocking=True)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
         with torch.amp.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
             out = model(
                 images,
@@ -75,19 +96,40 @@ def evaluate(
                 num_rounds=num_rounds,
                 top_m_windows=top_m_windows,
             )
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t_total += time.perf_counter() - t0
+        n_img += images.shape[0]
+
+        union_active = None
+        if active_meters is not None and out.get("active_masks_hi"):
+            u = torch.stack(out["active_masks_hi"], dim=0).amax(dim=0)  # [B, 1, 288, 288]
+            u_up = F.interpolate(u, size=masks.shape[-2:], mode="nearest").squeeze(1) > 0.5
+            union_active = torch.where(u_up, masks, torch.full_like(masks, ignore_index))
+
         for r, lg in enumerate(out["round_logits"]):
             lg_up = F.interpolate(lg.float(), size=masks.shape[-2:], mode="bilinear", align_corners=False)
-            meters[r].update(lg_up.argmax(dim=1), masks)
+            pred = lg_up.argmax(dim=1)
+            meters[r].update(pred, masks)
+            if active_meters is not None and union_active is not None:
+                active_meters[r].update(pred, union_active)
+
     per_round = [m.compute() for m in meters]
+    active_per_round_miou = (
+        [m.compute()["mIoU"] for m in active_meters] if active_meters is not None else []
+    )
     return {
         "final": per_round[-1],
         "per_round_mIoU": [r["mIoU"] for r in per_round],
+        "active_window_per_round_mIoU": active_per_round_miou,
+        "avg_val_latency_ms": round(1000.0 * t_total / max(n_img, 1), 2),
         "per_round": per_round,
     }
 
 
 def main() -> None:
     args = parse_args()
+    set_seed(args.seed)
     cfg = load_yaml_config(args.config)
     ds_cfg = cfg["dataset"]
     m_cfg = cfg["model"]
@@ -213,7 +255,11 @@ def main() -> None:
                     num_rounds=num_rounds,
                     top_m_windows=top_m,
                 )
-                losses = criterion(out["round_logits"], masks)
+                losses = criterion(
+                    out["round_logits"],
+                    masks,
+                    active_masks_hi=out.get("active_masks_hi"),
+                )
                 loss = losses["loss"] / grad_accum
 
             scaler.scale(loss).backward()
@@ -238,6 +284,8 @@ def main() -> None:
             "train_loss": round(loss_acc / max(steps, 1), 4),
             "val_mIoU": cur_miou,
             "val_per_round_mIoU": val_res["per_round_mIoU"],
+            "active_window_per_round_mIoU": val_res["active_window_per_round_mIoU"],
+            "avg_val_latency_ms": val_res["avg_val_latency_ms"],
             "val_mF1": val_res["final"]["mF1"],
             "val_OA": val_res["final"]["OA"],
             "per_class_IoU": val_res["final"]["per_class_IoU"],
@@ -246,7 +294,8 @@ def main() -> None:
         history.append(rec)
         print(
             f"[outer] ep={ep}/{epochs} loss={rec['train_loss']:.4f} "
-            f"val_mIoU={cur_miou:.2f} rounds={rec['val_per_round_mIoU']}",
+            f"val_mIoU={cur_miou:.2f} rounds={rec['val_per_round_mIoU']} "
+            f"active_win={rec['active_window_per_round_mIoU']} ms={rec['avg_val_latency_ms']}",
             flush=True,
         )
 

@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import random
 import time
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -33,11 +35,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--max_samples", type=int, default=None)
     p.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
+    p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
     cfg = load_yaml_config(args.config)
     ds_cfg = cfg["dataset"]
     m_cfg = cfg["model"]

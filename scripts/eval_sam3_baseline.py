@@ -57,6 +57,10 @@ def main() -> None:
         enable_segmentation=True,
         enable_inst_interactivity=False,
     )
+    if use_amp:
+        for mod in sam3_model.backbone.modules():
+            if isinstance(mod, (torch.nn.Linear, torch.nn.Conv2d, torch.nn.ConvTranspose2d, torch.nn.Embedding)):
+                mod.to(dtype=amp_dtype)
     wrapper = SAM3RecursiveBackbone(
         sam3_model=sam3_model,
         split_block_idx=int(cfg["model"].get("split_block_idx", 24)),
