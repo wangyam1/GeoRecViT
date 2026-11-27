@@ -2,14 +2,18 @@
 # Supervised SOTA: ~55.3-56.2% mIoU | SAM 3 OVSS (SegEarth-OV3): 47.4% mIoU
 dataset:
   name: loveda
+  source: local_loveda
+  local_root: /content/georecvit_cache/datasets/loveda
   hf_repo: chloechia/loveda
-  train_split: train
-  val_split: validation
+  train_split: Train
+  val_split: Val
+  domains:
+    - Urban
+    - Rural
   image_column: image
   mask_column: label
   ignore_index: 255
-  # Official LoveDA uses 0=no-data, 1..7=classes; some HF mirrors shift to 0..6.
-  # "auto" inspects pixel statistics at load time and maps to contiguous 0..6 + 255.
+  # Official LoveDA uses 0=no-data, 1..7=classes; "auto" maps to contiguous 0..6 + 255.
   label_mode: auto
   num_classes: 7
   class_names:
