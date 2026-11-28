@@ -97,6 +97,7 @@ class UncertaintyWindowRouter(nn.Module):
         pe_feats: torch.Tensor,
         sat_feats: torch.Tensor | None = None,
         top_m_override: int | None = None,
+        routing_mode: str = "hybrid",
     ) -> RoutingOutput:
         """Score 24x24 windows on the 72x72 ViT grid and select Top-M active windows.
 
@@ -124,7 +125,12 @@ class UncertaintyWindowRouter(nn.Module):
         disagreement_map = self.compute_expert_disagreement(pe_feats, sat_feats)
 
         weights = F.softmax(self.uncertainty_logits, dim=0)
-        uncertainty_map = weights[0] * entropy_map + weights[1] * disagreement_map
+        if routing_mode == "entropy_only":
+            uncertainty_map = entropy_map
+        elif routing_mode == "disagreement_only":
+            uncertainty_map = disagreement_map
+        else:
+            uncertainty_map = weights[0] * entropy_map + weights[1] * disagreement_map
 
         # Partition [B, 1, H, W] -> [B, gh, ws, gw, ws] -> [B, num_windows, ws*ws]
         u_win = (
@@ -136,7 +142,10 @@ class UncertaintyWindowRouter(nn.Module):
         mean_score = u_win.mean(dim=-1)
         max_score = u_win.amax(dim=-1)
         alpha = torch.sigmoid(self.pool_mix_logit)
-        window_scores = alpha * mean_score + (1.0 - alpha) * max_score  # [B, num_windows]
+        if routing_mode == "random":
+            window_scores = torch.rand((B, num_windows), device=pe_feats.device, dtype=torch.float32)
+        else:
+            window_scores = alpha * mean_score + (1.0 - alpha) * max_score  # [B, num_windows]
 
         m = self.top_m_windows if top_m_override is None else int(top_m_override)
         m = max(1, min(m, num_windows))

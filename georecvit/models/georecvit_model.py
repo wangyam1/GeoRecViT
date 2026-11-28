@@ -597,6 +597,7 @@ class GeoRecViT(nn.Module):
         num_rounds: Optional[int] = None,
         top_m_windows: Optional[int] = None,
         return_routing: bool = False,
+        routing_mode: str = "hybrid",
     ) -> Dict[str, object]:
         """Stage 2 / Inference: R-round Closed-Loop Heterogeneous Sparse ViT Recursion.
 
@@ -710,6 +711,7 @@ class GeoRecViT(nn.Module):
                     pe_feats=prev_pre_global,
                     sat_feats=cur_sat,
                     top_m_override=top_m_windows,
+                    routing_mode=routing_mode,
                 )
                 routing_history.append(routing)
                 active_ratios.append(routing.active_ratio)
