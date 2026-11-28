@@ -182,13 +182,17 @@ def main() -> None:
     class_names = ds_cfg["class_names"]
     ignore_index = int(ds_cfg.get("ignore_index", 255))
 
-    # Appendix A: Test-Time Depth Extrapolation R = 1, 2, 3, 4, 5 (+ Appendix E error-correction panels!)
+    # Appendix A: Test-Time Depth Extrapolation R = 1, 2, 3, 4, 5 (+ Appendix E panels & Appendix F embedding trajectories!)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     extrap_rounds = [1, 2, 3, 4, 5]
     extrap_meters = {r: SegmentationMeter(len(class_names), class_names, ignore_index) for r in extrap_rounds}
     extrap_bnd = {r: SegmentationMeter(len(class_names), class_names, ignore_index) for r in extrap_rounds}
     extrap_act = {r: SegmentationMeter(len(class_names), class_names, ignore_index) for r in extrap_rounds}
+    # Appendix F (mirrors RecursiveMAS Fig. 7): active-window class-distribution embeddings across R=1,2,3 vs GT
+    num_cls = len(class_names)
+    emb_gt_vecs: list[np.ndarray] = []
+    emb_round_vecs: dict[int, list[np.ndarray]] = {1: [], 2: [], 3: []}
     vis_stats = []
     vis_indices = set(np.linspace(0, max(len(val_ds) - 1, 0), min(args.num_vis, len(val_ds)), dtype=int).tolist())
 
@@ -209,13 +213,38 @@ def main() -> None:
             act_targets = torch.where(u_up, masks, torch.full_like(masks, ignore_index))
 
             preds = {}
+            probs_r: dict[int, torch.Tensor] = {}
             for r in extrap_rounds:
                 lg_up = F.interpolate(out["round_logits"][r - 1].float(), size=masks.shape[-2:], mode="bilinear", align_corners=False)
                 pred = lg_up.argmax(dim=1)
                 preds[r] = pred
+                if r in (1, 2, 3):
+                    probs_r[r] = F.softmax(lg_up, dim=1)
                 extrap_meters[r].update(pred, masks)
                 extrap_bnd[r].update(pred, b_targets)
                 extrap_act[r].update(pred, act_targets)
+
+            # Collect 3x3 native-window pooled class distributions for active windows (mirrors RecursiveMAS Fig. 7)
+            valid_m = masks[0] != ignore_index
+            gt_safe = torch.where(valid_m, masks[0], torch.zeros_like(masks[0]))
+            gt_oh = F.one_hot(gt_safe, num_classes=num_cls).permute(2, 0, 1).float() * valid_m.unsqueeze(0).float()
+            H_img, W_img = masks.shape[-2:]
+            gh, gw = H_img // 3, W_img // 3
+            for wy in range(3):
+                for wx in range(3):
+                    ys, ye = wy * gh, (wy + 1) * gh if wy < 2 else H_img
+                    xs, xe = wx * gw, (wx + 1) * gw if wx < 2 else W_img
+                    if u_up[0, ys:ye, xs:xe].float().mean().item() < 0.5:
+                        continue
+                    v_patch = valid_m[ys:ye, xs:xe]
+                    denom = v_patch.float().sum().item()
+                    if denom < 32.0:
+                        continue
+                    gt_v = (gt_oh[:, ys:ye, xs:xe].sum(dim=(1, 2)) / denom).cpu().numpy()
+                    emb_gt_vecs.append(gt_v)
+                    for r in (1, 2, 3):
+                        pr_v = ((probs_r[r][0, :, ys:ye, xs:xe] * v_patch.unsqueeze(0).float()).sum(dim=(1, 2)) / denom).cpu().numpy()
+                        emb_round_vecs[r].append(pr_v)
 
             if idx in vis_indices:
                 stat = _save_correction_panel(
@@ -226,6 +255,32 @@ def main() -> None:
                 vis_stats.append(stat)
     peak_vram_gb = round(torch.cuda.max_memory_allocated(device) / (1024 ** 3), 2) if device.type == "cuda" else 0.0
     extrap_latency_ms = round(1000.0 * (time.perf_counter() - t0_extrap) / max(len(val_ds), 1), 2)
+
+    # Fit shared 2D PCA on GT + R1..R3 active-window class distributions (RecursiveMAS Fig. 7 mirror)
+    appendix_f = {}
+    if len(emb_gt_vecs) >= 10:
+        gt_mat = np.stack(emb_gt_vecs, axis=0)
+        r_mats = {r: np.stack(emb_round_vecs[r], axis=0) for r in (1, 2, 3)}
+        stacked = np.concatenate([gt_mat, r_mats[1], r_mats[2], r_mats[3]], axis=0)
+        mean_vec = stacked.mean(axis=0, keepdims=True)
+        _, _, vt = np.linalg.svd(stacked - mean_vec, full_matrices=False)
+        basis2 = vt[:2].T  # [C, 2]
+        gt_2d = (gt_mat - mean_vec) @ basis2
+        appendix_f = {
+            "num_active_windows": int(gt_mat.shape[0]),
+            "gt_2d": np.round(gt_2d, 5).tolist(),
+            "rounds": {},
+        }
+        for r in (1, 2, 3):
+            r_2d = (r_mats[r] - mean_vec) @ basis2
+            l2_dist = float(np.linalg.norm(r_mats[r] - gt_mat, axis=1).mean())
+            kl_div = float(np.mean(np.sum(gt_mat * np.log((gt_mat + 1e-6) / (r_mats[r] + 1e-6)), axis=1)))
+            appendix_f["rounds"][f"R={r}"] = {
+                "pred_2d": np.round(r_2d, 5).tolist(),
+                "mean_l2_to_gt": round(l2_dist, 5),
+                "mean_kl_gt_to_pred": round(kl_div, 5),
+                "centroid_shift_2d": round(float(np.linalg.norm(r_2d.mean(axis=0) - gt_2d.mean(axis=0))), 5),
+            }
 
     appendix_a = {
         "top_m_windows": args.top_m_windows,
@@ -320,6 +375,7 @@ def main() -> None:
         "appendix_c_domain_breakdown": appendix_c,
         "appendix_d_module_params_and_vram": {**module_params, "peak_eval_vram_gb": peak_vram_gb},
         "appendix_e_correction_panels": vis_stats,
+        "appendix_f_round_embedding_alignment": appendix_f,
     }
     out_json = out_dir / f"{ds_cfg['name']}_appendix_a_to_e.json"
     with open(out_json, "w", encoding="utf-8") as f:
