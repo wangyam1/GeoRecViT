@@ -1,0 +1,27 @@
+{
+  "expert_a": "sam2.1-hiera-large (576d)",
+  "expert_b": "dinov3-sat493m (1024d)",
+  "sam2_pe_mid": {
+    "erank": 20.99,
+    "top3_var": 0.3948,
+    "top16_var": 0.6078
+  },
+  "dinov3_sat_raw": {
+    "erank": 33.11,
+    "top3_var": 0.2659,
+    "top16_var": 0.5431
+  },
+  "outer_projected": {
+    "erank": 17.15,
+    "top3_var": 0.4819,
+    "top16_var": 0.7775
+  },
+  "outer_plus_inner_aligned": {
+    "erank": 38.89,
+    "top3_var": 0.2087,
+    "top16_var": 0.5029
+  },
+  "grassmann_top16_pe_vs_outer": 0.261,
+  "grassmann_top16_pe_vs_aligned": 0.8417,
+  "cosine_pe_vs_aligned": 0.9435
+}

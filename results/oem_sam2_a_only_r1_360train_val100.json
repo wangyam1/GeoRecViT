@@ -1,0 +1,106 @@
+[
+  {
+    "epoch": 1,
+    "train_loss": 2.7191,
+    "val_mIoU": 24.62,
+    "val_per_round_mIoU": [
+      24.62
+    ],
+    "boundary_per_round_mIoU": [
+      18.86
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 127.5,
+    "val_mF1": 35.47,
+    "val_OA": 52.49,
+    "per_class_IoU": {
+      "bareland": 0.0,
+      "rangeland": 37.47,
+      "developed_space": 28.45,
+      "road": 22.41,
+      "tree": 49.15,
+      "water": 1.63,
+      "agriculture_land": 5.62,
+      "building": 52.22
+    },
+    "elapsed_sec": 115.0
+  },
+  {
+    "epoch": 2,
+    "train_loss": 2.1068,
+    "val_mIoU": 35.22,
+    "val_per_round_mIoU": [
+      35.22
+    ],
+    "boundary_per_round_mIoU": [
+      22.76
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 127.61,
+    "val_mF1": 49.12,
+    "val_OA": 60.87,
+    "per_class_IoU": {
+      "bareland": 0.0,
+      "rangeland": 43.1,
+      "developed_space": 35.1,
+      "road": 36.48,
+      "tree": 53.1,
+      "water": 19.92,
+      "agriculture_land": 31.11,
+      "building": 62.91
+    },
+    "elapsed_sec": 229.7
+  },
+  {
+    "epoch": 3,
+    "train_loss": 1.8434,
+    "val_mIoU": 39.25,
+    "val_per_round_mIoU": [
+      39.25
+    ],
+    "boundary_per_round_mIoU": [
+      24.77
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 127.38,
+    "val_mF1": 54.02,
+    "val_OA": 62.36,
+    "per_class_IoU": {
+      "bareland": 3.77,
+      "rangeland": 38.46,
+      "developed_space": 38.04,
+      "road": 38.72,
+      "tree": 55.44,
+      "water": 33.16,
+      "agriculture_land": 41.08,
+      "building": 65.33
+    },
+    "elapsed_sec": 345.0
+  },
+  {
+    "epoch": 4,
+    "train_loss": 1.7203,
+    "val_mIoU": 40.09,
+    "val_per_round_mIoU": [
+      40.09
+    ],
+    "boundary_per_round_mIoU": [
+      24.95
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 127.32,
+    "val_mF1": 54.66,
+    "val_OA": 64.08,
+    "per_class_IoU": {
+      "bareland": 2.39,
+      "rangeland": 43.63,
+      "developed_space": 37.91,
+      "road": 39.79,
+      "tree": 55.68,
+      "water": 31.53,
+      "agriculture_land": 43.85,
+      "building": 65.96
+    },
+    "elapsed_sec": 460.1
+  }
+]
