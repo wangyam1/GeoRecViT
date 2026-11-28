@@ -104,12 +104,38 @@ class ConceptCalibrationReadout(nn.Module):
             nn.GroupNorm(8, fpn_dim),
             nn.GELU(),
         )
-        # Fuse refined PE-ViT FPN + satellite structural features
-        self.refine_conv = nn.Sequential(
+        # Fuse refined PE-ViT FPN + satellite structural features with multi-scale ASPP + global context
+        # (matches DINOv3OnlySegmenter receptive field so heterogeneous fusion strictly dominates
+        #  on BOTH fine urban geometry AND broad rural land-cover patches!)
+        self.refine_stem = nn.Sequential(
             nn.Conv2d(fpn_dim * 2, fpn_dim, kernel_size=3, padding=1, bias=False),
             nn.GroupNorm(8, fpn_dim),
             nn.GELU(),
-            nn.Conv2d(fpn_dim, fpn_dim, kernel_size=3, padding=1, bias=False),
+        )
+        b_dim = max(32, fpn_dim // 4)
+        self.aspp_1 = nn.Sequential(
+            nn.Conv2d(fpn_dim, b_dim, kernel_size=1, bias=False),
+            nn.GroupNorm(8, b_dim),
+            nn.GELU(),
+        )
+        self.aspp_d2 = nn.Sequential(
+            nn.Conv2d(fpn_dim, b_dim, kernel_size=3, padding=2, dilation=2, bias=False),
+            nn.GroupNorm(8, b_dim),
+            nn.GELU(),
+        )
+        self.aspp_d4 = nn.Sequential(
+            nn.Conv2d(fpn_dim, b_dim, kernel_size=3, padding=4, dilation=4, bias=False),
+            nn.GroupNorm(8, b_dim),
+            nn.GELU(),
+        )
+        self.aspp_pool = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(fpn_dim, b_dim, kernel_size=1, bias=False),
+            nn.GroupNorm(8, b_dim),
+            nn.GELU(),
+        )
+        self.refine_conv = nn.Sequential(
+            nn.Conv2d(fpn_dim + b_dim * 4, fpn_dim, kernel_size=3, padding=1, bias=False),
             nn.GroupNorm(8, fpn_dim),
             nn.GELU(),
         )
@@ -144,7 +170,11 @@ class ConceptCalibrationReadout(nn.Module):
         else:
             sat_up = torch.zeros_like(fpn_normed)
 
-        refined = self.refine_conv(torch.cat([fpn_normed, sat_up], dim=1))
+        stem = self.refine_stem(torch.cat([fpn_normed, sat_up], dim=1))
+        pool = F.interpolate(self.aspp_pool(stem), size=(H, W), mode="bilinear", align_corners=False)
+        refined = stem + self.refine_conv(
+            torch.cat([stem, self.aspp_1(stem), self.aspp_d2(stem), self.aspp_d4(stem), pool], dim=1)
+        )
         visual_embed = F.normalize(self.proto_proj(refined).float(), dim=1, eps=1e-6)
         proto = F.normalize(class_prototypes.float().to(device=refined.device), dim=-1, eps=1e-6)
         proto_logits = torch.einsum("bchw,kc->bkhw", visual_embed, proto) * self.logit_temp.float()
