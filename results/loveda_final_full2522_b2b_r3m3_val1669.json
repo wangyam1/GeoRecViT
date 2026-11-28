@@ -1,0 +1,83 @@
+{
+  "dataset": "loveda",
+  "dinov3_dir": "/content/georecvit_cache/weights/dinov3-vitl16-pretrain-sat493m",
+  "num_rounds": 3,
+  "top_m_windows": 3,
+  "params": {
+    "total_params": 313410841,
+    "trainable_params": 6539538,
+    "frozen_params": 306871303
+  },
+  "train_samples": 2522,
+  "val_samples": 1669,
+  "best_val_mIoU": 51.69,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 4.3947,
+      "val_mIoU": 51.65,
+      "val_per_round_mIoU": [
+        52.08,
+        51.79,
+        51.65
+      ],
+      "boundary_per_round_mIoU": [
+        27.66,
+        27.96,
+        28.0
+      ],
+      "active_window_per_round_mIoU": [
+        45.46,
+        45.12,
+        44.8
+      ],
+      "avg_val_latency_ms": 320.74,
+      "val_mF1": 67.03,
+      "val_OA": 70.05,
+      "per_class_IoU": {
+        "background": 47.52,
+        "building": 61.57,
+        "road": 57.6,
+        "water": 65.08,
+        "barren": 25.75,
+        "forest": 41.81,
+        "agricultural": 62.22
+      },
+      "elapsed_sec": 2911.0
+    },
+    {
+      "epoch": 2,
+      "train_loss": 4.313,
+      "val_mIoU": 51.69,
+      "val_per_round_mIoU": [
+        52.08,
+        51.78,
+        51.69
+      ],
+      "boundary_per_round_mIoU": [
+        27.66,
+        27.96,
+        28.0
+      ],
+      "active_window_per_round_mIoU": [
+        45.47,
+        45.22,
+        45.06
+      ],
+      "avg_val_latency_ms": 320.47,
+      "val_mF1": 67.0,
+      "val_OA": 70.22,
+      "per_class_IoU": {
+        "background": 47.94,
+        "building": 61.55,
+        "road": 58.1,
+        "water": 65.1,
+        "barren": 24.71,
+        "forest": 41.89,
+        "agricultural": 62.54
+      },
+      "elapsed_sec": 5754.3
+    }
+  ],
+  "full_val": null
+}

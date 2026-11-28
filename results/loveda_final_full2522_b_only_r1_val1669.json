@@ -1,0 +1,117 @@
+{
+  "dataset": "loveda",
+  "dinov3_dir": "/content/georecvit_cache/weights/dinov3-vitl16-pretrain-sat493m",
+  "num_rounds": 1,
+  "top_m_windows": 3,
+  "params": {
+    "total_params": 306871303,
+    "trainable_params": 3741703,
+    "frozen_params": 303129600
+  },
+  "train_samples": 2522,
+  "val_samples": 1669,
+  "best_val_mIoU": 52.08,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 1.4716,
+      "val_mIoU": 52.08,
+      "val_per_round_mIoU": [
+        52.08
+      ],
+      "boundary_per_round_mIoU": [
+        27.66
+      ],
+      "active_window_per_round_mIoU": [],
+      "avg_val_latency_ms": 89.09,
+      "val_mF1": 67.5,
+      "val_OA": 70.27,
+      "per_class_IoU": {
+        "background": 48.68,
+        "building": 61.13,
+        "road": 58.33,
+        "water": 65.41,
+        "barren": 27.67,
+        "forest": 41.46,
+        "agricultural": 61.86
+      },
+      "elapsed_sec": 772.0
+    },
+    {
+      "epoch": 2,
+      "train_loss": 1.1834,
+      "val_mIoU": 51.42,
+      "val_per_round_mIoU": [
+        51.42
+      ],
+      "boundary_per_round_mIoU": [
+        27.5
+      ],
+      "active_window_per_round_mIoU": [],
+      "avg_val_latency_ms": 88.83,
+      "val_mF1": 67.0,
+      "val_OA": 69.96,
+      "per_class_IoU": {
+        "background": 49.07,
+        "building": 63.15,
+        "road": 55.74,
+        "water": 60.52,
+        "barren": 27.64,
+        "forest": 41.66,
+        "agricultural": 62.14
+      },
+      "elapsed_sec": 1562.4
+    },
+    {
+      "epoch": 3,
+      "train_loss": 1.0735,
+      "val_mIoU": 51.84,
+      "val_per_round_mIoU": [
+        51.84
+      ],
+      "boundary_per_round_mIoU": [
+        28.39
+      ],
+      "active_window_per_round_mIoU": [],
+      "avg_val_latency_ms": 88.38,
+      "val_mF1": 67.26,
+      "val_OA": 70.51,
+      "per_class_IoU": {
+        "background": 48.56,
+        "building": 63.79,
+        "road": 56.05,
+        "water": 62.14,
+        "barren": 26.95,
+        "forest": 41.41,
+        "agricultural": 63.95
+      },
+      "elapsed_sec": 2347.3
+    },
+    {
+      "epoch": 4,
+      "train_loss": 1.0185,
+      "val_mIoU": 51.99,
+      "val_per_round_mIoU": [
+        51.99
+      ],
+      "boundary_per_round_mIoU": [
+        28.57
+      ],
+      "active_window_per_round_mIoU": [],
+      "avg_val_latency_ms": 88.28,
+      "val_mF1": 67.16,
+      "val_OA": 70.3,
+      "per_class_IoU": {
+        "background": 47.14,
+        "building": 63.97,
+        "road": 57.96,
+        "water": 65.91,
+        "barren": 24.23,
+        "forest": 41.83,
+        "agricultural": 62.89
+      },
+      "elapsed_sec": 3130.3
+    }
+  ],
+  "full_val": null
+}

@@ -1,0 +1,134 @@
+[
+  {
+    "epoch": 1,
+    "train_loss": 4.7635,
+    "val_mIoU": 42.3,
+    "val_per_round_mIoU": [
+      42.28,
+      42.3,
+      42.3
+    ],
+    "boundary_per_round_mIoU": [
+      26.95,
+      26.93,
+      26.9
+    ],
+    "active_window_per_round_mIoU": [
+      37.34,
+      37.37,
+      37.38
+    ],
+    "avg_val_latency_ms": 2402.43,
+    "val_mF1": 57.46,
+    "val_OA": 59.0,
+    "per_class_IoU": {
+      "background": 36.31,
+      "building": 64.85,
+      "road": 58.42,
+      "water": 43.97,
+      "barren": 15.15,
+      "forest": 25.74,
+      "agricultural": 51.68
+    },
+    "elapsed_sec": 1439.5
+  },
+  {
+    "epoch": 2,
+    "train_loss": 4.6874,
+    "val_mIoU": 42.5,
+    "val_per_round_mIoU": [
+      42.28,
+      42.43,
+      42.5
+    ],
+    "boundary_per_round_mIoU": [
+      26.95,
+      27.11,
+      27.25
+    ],
+    "active_window_per_round_mIoU": [
+      37.04,
+      37.33,
+      37.41
+    ],
+    "avg_val_latency_ms": 2398.21,
+    "val_mF1": 57.73,
+    "val_OA": 58.76,
+    "per_class_IoU": {
+      "background": 35.69,
+      "building": 64.93,
+      "road": 58.48,
+      "water": 44.6,
+      "barren": 16.58,
+      "forest": 25.5,
+      "agricultural": 51.72
+    },
+    "elapsed_sec": 2873.3
+  },
+  {
+    "epoch": 3,
+    "train_loss": 4.7403,
+    "val_mIoU": 42.39,
+    "val_per_round_mIoU": [
+      42.28,
+      42.35,
+      42.39
+    ],
+    "boundary_per_round_mIoU": [
+      26.95,
+      27.0,
+      27.05
+    ],
+    "active_window_per_round_mIoU": [
+      37.3,
+      37.47,
+      37.56
+    ],
+    "avg_val_latency_ms": 2403.29,
+    "val_mF1": 57.61,
+    "val_OA": 58.88,
+    "per_class_IoU": {
+      "background": 35.98,
+      "building": 64.95,
+      "road": 58.52,
+      "water": 43.69,
+      "barren": 16.06,
+      "forest": 25.92,
+      "agricultural": 51.62
+    },
+    "elapsed_sec": 4308.1
+  },
+  {
+    "epoch": 4,
+    "train_loss": 4.7088,
+    "val_mIoU": 42.36,
+    "val_per_round_mIoU": [
+      42.28,
+      42.32,
+      42.36
+    ],
+    "boundary_per_round_mIoU": [
+      26.95,
+      26.98,
+      27.02
+    ],
+    "active_window_per_round_mIoU": [
+      37.3,
+      37.42,
+      37.52
+    ],
+    "avg_val_latency_ms": 2402.3,
+    "val_mF1": 57.56,
+    "val_OA": 58.91,
+    "per_class_IoU": {
+      "background": 36.06,
+      "building": 64.97,
+      "road": 58.49,
+      "water": 43.66,
+      "barren": 15.8,
+      "forest": 25.94,
+      "agricultural": 51.61
+    },
+    "elapsed_sec": 5743.2
+  }
+]

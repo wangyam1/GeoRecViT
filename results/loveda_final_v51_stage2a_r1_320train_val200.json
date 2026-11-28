@@ -1,0 +1,102 @@
+[
+  {
+    "epoch": 1,
+    "train_loss": 1.5925,
+    "val_mIoU": 47.14,
+    "val_per_round_mIoU": [
+      47.14
+    ],
+    "boundary_per_round_mIoU": [
+      26.63
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 2000.52,
+    "val_mF1": 63.34,
+    "val_OA": 62.77,
+    "per_class_IoU": {
+      "background": 45.03,
+      "building": 64.54,
+      "road": 60.7,
+      "water": 45.77,
+      "barren": 30.73,
+      "forest": 40.38,
+      "agricultural": 42.83
+    },
+    "elapsed_sec": 1146.5
+  },
+  {
+    "epoch": 2,
+    "train_loss": 1.3007,
+    "val_mIoU": 51.11,
+    "val_per_round_mIoU": [
+      51.11
+    ],
+    "boundary_per_round_mIoU": [
+      30.31
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 1997.31,
+    "val_mF1": 67.0,
+    "val_OA": 66.32,
+    "per_class_IoU": {
+      "background": 42.08,
+      "building": 64.43,
+      "road": 64.61,
+      "water": 53.19,
+      "barren": 37.1,
+      "forest": 40.36,
+      "agricultural": 56.03
+    },
+    "elapsed_sec": 2287.0
+  },
+  {
+    "epoch": 3,
+    "train_loss": 1.1949,
+    "val_mIoU": 49.35,
+    "val_per_round_mIoU": [
+      49.35
+    ],
+    "boundary_per_round_mIoU": [
+      27.98
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 1992.87,
+    "val_mF1": 65.21,
+    "val_OA": 65.69,
+    "per_class_IoU": {
+      "background": 41.83,
+      "building": 65.44,
+      "road": 61.61,
+      "water": 52.81,
+      "barren": 31.92,
+      "forest": 36.11,
+      "agricultural": 55.7
+    },
+    "elapsed_sec": 3427.6
+  },
+  {
+    "epoch": 4,
+    "train_loss": 1.1174,
+    "val_mIoU": 49.41,
+    "val_per_round_mIoU": [
+      49.41
+    ],
+    "boundary_per_round_mIoU": [
+      28.13
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 1992.05,
+    "val_mF1": 65.21,
+    "val_OA": 65.88,
+    "per_class_IoU": {
+      "background": 42.4,
+      "building": 65.53,
+      "road": 62.39,
+      "water": 52.54,
+      "barren": 29.69,
+      "forest": 37.61,
+      "agricultural": 55.73
+    },
+    "elapsed_sec": 4567.5
+  }
+]
