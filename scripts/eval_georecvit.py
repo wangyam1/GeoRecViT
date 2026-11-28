@@ -20,14 +20,22 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from georecvit.data import build_rs_datasets, load_yaml_config
-from georecvit.models import DINOv3Expert, GeoRecViT, GeoRecViTConfig, SAM3RecursiveBackbone
+from georecvit.models import (
+    DINOv3Expert,
+    GeoRecViT,
+    GeoRecViTConfig,
+    SAM2RecursiveBackbone,
+    SAM3RecursiveBackbone,
+)
 from georecvit.utils import SegmentationMeter, extract_boundary_mask, load_georecvit_links
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Evaluate GeoRecViT test-time scaling & sparse routing.")
     p.add_argument("--config", type=str, required=True)
-    p.add_argument("--sam3_ckpt", type=str, required=True)
+    p.add_argument("--expert_a", type=str, default="sam3", choices=["sam3", "sam2"])
+    p.add_argument("--sam3_ckpt", type=str, default="")
+    p.add_argument("--sam2_dir", type=str, default="")
     p.add_argument("--dinov3_dir", type=str, default="")
     p.add_argument("--links_ckpt", type=str, required=True)
     p.add_argument("--cache_dir", type=str, default="/content/georecvit_cache/datasets")
@@ -55,32 +63,41 @@ def main() -> None:
     amp_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.precision]
     use_amp = device.type == "cuda" and args.precision != "fp32"
 
-    from sam3.model_builder import build_sam3_image_model
+    if args.expert_a == "sam2":
+        sam3_wrapper = SAM2RecursiveBackbone.from_pretrained(
+            model_path=args.sam2_dir,
+            resolution=1024,
+            use_grad_checkpoint=False,
+            dtype=amp_dtype if use_amp else torch.float32,
+        )
+    else:
+        from sam3.model_builder import build_sam3_image_model
 
-    sam3_model = build_sam3_image_model(
-        checkpoint_path=args.sam3_ckpt,
-        load_from_HF=False,
-        device=str(device),
-        eval_mode=True,
-        enable_segmentation=True,
-        enable_inst_interactivity=False,
-    )
-    if use_amp:
-        for mod in sam3_model.backbone.modules():
-            if isinstance(mod, (torch.nn.Linear, torch.nn.Conv2d, torch.nn.ConvTranspose2d, torch.nn.Embedding)):
-                mod.to(dtype=amp_dtype)
-    sam3_wrapper = SAM3RecursiveBackbone(
-        sam3_model=sam3_model,
-        split_block_idx=int(m_cfg.get("split_block_idx", 24)),
-        resolution=int(ds_cfg.get("sam3_resolution", 1008)),
-        use_grad_checkpoint=False,
-        class_chunk_size=args.class_chunk_size,
-    )
+        sam3_model = build_sam3_image_model(
+            checkpoint_path=args.sam3_ckpt,
+            load_from_HF=False,
+            device=str(device),
+            eval_mode=True,
+            enable_segmentation=True,
+            enable_inst_interactivity=False,
+        )
+        if use_amp:
+            for mod in sam3_model.backbone.modules():
+                if isinstance(mod, (torch.nn.Linear, torch.nn.Conv2d, torch.nn.ConvTranspose2d, torch.nn.Embedding)):
+                    mod.to(dtype=amp_dtype)
+        sam3_wrapper = SAM3RecursiveBackbone(
+            sam3_model=sam3_model,
+            split_block_idx=int(m_cfg.get("split_block_idx", 24)),
+            resolution=int(ds_cfg.get("sam3_resolution", 1008)),
+            use_grad_checkpoint=False,
+            class_chunk_size=args.class_chunk_size,
+        )
     use_dinov3 = (not args.no_dinov3) and bool(m_cfg.get("use_dinov3", True)) and bool(args.dinov3_dir)
     dinov3 = (
         DINOv3Expert(
             model_path=args.dinov3_dir,
             input_size=int(ds_cfg.get("dinov3_resolution", 512)),
+            target_grid_hw=sam3_wrapper.grid_hw,
             split_layer_idx=int(args.dinov3_split_layer),
             use_grad_checkpoint=False,
             dtype=amp_dtype if use_amp else torch.float32,
@@ -96,7 +113,7 @@ def main() -> None:
         window_size=sam3_wrapper.window_size,
         num_recursive_rounds=max(args.rounds_list),
         sparse_top_windows=int(m_cfg.get("sparse_top_windows", 3)),
-        use_sam3_detr=bool(m_cfg.get("use_sam3_detr", True)),
+        use_sam3_detr=bool(getattr(sam3_wrapper, "has_detr", True)) and bool(m_cfg.get("use_sam3_detr", True)),
         detr_round1_only=(not args.detr_every_round) and bool(m_cfg.get("detr_round1_only", True)),
         use_dinov3=use_dinov3,
         use_inner_link=True,

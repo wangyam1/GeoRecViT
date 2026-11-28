@@ -23,7 +23,13 @@ from tqdm import tqdm
 
 from georecvit.data import build_rs_datasets, load_yaml_config
 from georecvit.losses import MultiRoundSegmentationLoss
-from georecvit.models import DINOv3Expert, GeoRecViT, GeoRecViTConfig, SAM3RecursiveBackbone
+from georecvit.models import (
+    DINOv3Expert,
+    GeoRecViT,
+    GeoRecViTConfig,
+    SAM2RecursiveBackbone,
+    SAM3RecursiveBackbone,
+)
 from georecvit.utils import (
     SegmentationMeter,
     extract_boundary_mask,
@@ -35,7 +41,9 @@ from georecvit.utils import (
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Stage 2: Outer-Loop multi-round training for GeoRecViT.")
     p.add_argument("--config", type=str, required=True)
-    p.add_argument("--sam3_ckpt", type=str, required=True)
+    p.add_argument("--expert_a", type=str, default="sam3", choices=["sam3", "sam2"])
+    p.add_argument("--sam3_ckpt", type=str, default="")
+    p.add_argument("--sam2_dir", type=str, default="")
     p.add_argument("--dinov3_dir", type=str, default="")
     p.add_argument("--inner_ckpt", type=str, default="", help="Optional Stage 1 inner warm-start .pt")
     p.add_argument("--anchor_ckpt", type=str, default="", help="Optional Stage 2a single-pass anchor .pt")
@@ -168,33 +176,42 @@ def main() -> None:
     amp_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.precision]
     use_amp = device.type == "cuda" and args.precision != "fp32"
 
-    from sam3.model_builder import build_sam3_image_model
+    if args.expert_a == "sam2":
+        sam3_wrapper = SAM2RecursiveBackbone.from_pretrained(
+            model_path=args.sam2_dir,
+            resolution=1024,
+            use_grad_checkpoint=True,
+            dtype=amp_dtype if use_amp else torch.float32,
+        )
+    else:
+        from sam3.model_builder import build_sam3_image_model
 
-    sam3_model = build_sam3_image_model(
-        checkpoint_path=args.sam3_ckpt,
-        load_from_HF=False,
-        device=str(device),
-        eval_mode=True,
-        enable_segmentation=True,
-        enable_inst_interactivity=False,
-    )
-    if use_amp:
-        # Cast heavy frozen backbone Linear/Conv/Embedding weights to fp16/bf16 (-1.5 GB VRAM)
-        # while keeping norms and DETR decoder (which disables autocast in FFN) in fp32.
-        for mod in sam3_model.backbone.modules():
-            if isinstance(mod, (torch.nn.Linear, torch.nn.Conv2d, torch.nn.ConvTranspose2d, torch.nn.Embedding)):
-                mod.to(dtype=amp_dtype)
-    sam3_wrapper = SAM3RecursiveBackbone(
-        sam3_model=sam3_model,
-        split_block_idx=int(m_cfg.get("split_block_idx", 24)),
-        resolution=int(ds_cfg.get("sam3_resolution", 1008)),
-        use_grad_checkpoint=True,
-        class_chunk_size=args.class_chunk_size,
-    )
+        sam3_model = build_sam3_image_model(
+            checkpoint_path=args.sam3_ckpt,
+            load_from_HF=False,
+            device=str(device),
+            eval_mode=True,
+            enable_segmentation=True,
+            enable_inst_interactivity=False,
+        )
+        if use_amp:
+            # Cast heavy frozen backbone Linear/Conv/Embedding weights to fp16/bf16 (-1.5 GB VRAM)
+            # while keeping norms and DETR decoder (which disables autocast in FFN) in fp32.
+            for mod in sam3_model.backbone.modules():
+                if isinstance(mod, (torch.nn.Linear, torch.nn.Conv2d, torch.nn.ConvTranspose2d, torch.nn.Embedding)):
+                    mod.to(dtype=amp_dtype)
+        sam3_wrapper = SAM3RecursiveBackbone(
+            sam3_model=sam3_model,
+            split_block_idx=int(m_cfg.get("split_block_idx", 24)),
+            resolution=int(ds_cfg.get("sam3_resolution", 1008)),
+            use_grad_checkpoint=True,
+            class_chunk_size=args.class_chunk_size,
+        )
     dinov3 = (
         DINOv3Expert(
             model_path=args.dinov3_dir,
             input_size=int(ds_cfg.get("dinov3_resolution", 512)),
+            target_grid_hw=sam3_wrapper.grid_hw,
             split_layer_idx=int(args.dinov3_split_layer),
             use_grad_checkpoint=True,
             dtype=amp_dtype if use_amp else torch.float32,
@@ -211,7 +228,7 @@ def main() -> None:
         window_size=sam3_wrapper.window_size,
         num_recursive_rounds=num_rounds,
         sparse_top_windows=top_m,
-        use_sam3_detr=(not args.no_detr) and bool(m_cfg.get("use_sam3_detr", True)),
+        use_sam3_detr=bool(getattr(sam3_wrapper, "has_detr", True)) and (not args.no_detr) and bool(m_cfg.get("use_sam3_detr", True)),
         detr_round1_only=(not args.detr_every_round) and bool(m_cfg.get("detr_round1_only", True)),
         use_dinov3=use_dinov3,
         use_inner_link=(not args.no_inner_link) and bool(m_cfg.get("use_inner_link", True)),

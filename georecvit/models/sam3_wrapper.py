@@ -120,6 +120,9 @@ class SAM3RecursiveBackbone(nn.Module):
         self.embed_dim = int(self.vit.channel_list[-1])
         self.window_size = int(self.vit.blocks[split_block_idx].window_size) or 24
         self.d_model = int(self.sam3.hidden_dim)
+        patch_sz = int(getattr(self.vit.patch_embed.proj, "stride", (14, 14))[0])
+        self.grid_hw: Tuple[int, int] = (self.resolution // patch_sz, self.resolution // patch_sz)
+        self.has_detr = True
 
         # Cached encoded text prompts per class tuple
         self._text_cache_key: Optional[Tuple[str, ...]] = None
