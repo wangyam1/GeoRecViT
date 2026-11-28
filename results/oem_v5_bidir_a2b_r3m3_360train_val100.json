@@ -1,0 +1,104 @@
+[
+  {
+    "epoch": 1,
+    "train_loss": 3.9432,
+    "val_mIoU": 62.05,
+    "val_per_round_mIoU": [
+      62.02,
+      62.03,
+      62.05
+    ],
+    "boundary_per_round_mIoU": [
+      39.17,
+      39.15,
+      39.14
+    ],
+    "active_window_per_round_mIoU": [
+      58.95,
+      58.96,
+      58.98
+    ],
+    "avg_val_latency_ms": 2462.62,
+    "val_mF1": 76.05,
+    "val_OA": 76.05,
+    "per_class_IoU": {
+      "bareland": 56.41,
+      "rangeland": 56.21,
+      "developed_space": 48.08,
+      "road": 48.47,
+      "tree": 64.93,
+      "water": 71.5,
+      "agriculture_land": 75.24,
+      "building": 75.55
+    },
+    "elapsed_sec": 1357.2
+  },
+  {
+    "epoch": 2,
+    "train_loss": 3.918,
+    "val_mIoU": 62.11,
+    "val_per_round_mIoU": [
+      62.02,
+      62.07,
+      62.11
+    ],
+    "boundary_per_round_mIoU": [
+      39.17,
+      39.22,
+      39.29
+    ],
+    "active_window_per_round_mIoU": [
+      59.22,
+      59.28,
+      59.34
+    ],
+    "avg_val_latency_ms": 2463.43,
+    "val_mF1": 76.09,
+    "val_OA": 76.09,
+    "per_class_IoU": {
+      "bareland": 56.81,
+      "rangeland": 56.24,
+      "developed_space": 48.1,
+      "road": 48.33,
+      "tree": 64.88,
+      "water": 71.54,
+      "agriculture_land": 75.16,
+      "building": 75.77
+    },
+    "elapsed_sec": 2711.9
+  },
+  {
+    "epoch": 3,
+    "train_loss": 3.924,
+    "val_mIoU": 62.11,
+    "val_per_round_mIoU": [
+      62.02,
+      62.07,
+      62.11
+    ],
+    "boundary_per_round_mIoU": [
+      39.17,
+      39.22,
+      39.26
+    ],
+    "active_window_per_round_mIoU": [
+      58.9,
+      58.96,
+      59.01
+    ],
+    "avg_val_latency_ms": 2462.69,
+    "val_mF1": 76.09,
+    "val_OA": 76.09,
+    "per_class_IoU": {
+      "bareland": 56.78,
+      "rangeland": 56.27,
+      "developed_space": 48.17,
+      "road": 48.32,
+      "tree": 64.83,
+      "water": 71.56,
+      "agriculture_land": 75.18,
+      "building": 75.74
+    },
+    "elapsed_sec": 4067.3
+  }
+]

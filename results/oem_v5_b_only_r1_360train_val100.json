@@ -1,0 +1,162 @@
+{
+  "dataset": "openearthmap",
+  "dinov3_dir": "/content/georecvit_cache/weights/dinov3-vitl16-pretrain-sat493m",
+  "num_rounds": 1,
+  "top_m_windows": 3,
+  "params": {
+    "total_params": 306871560,
+    "trainable_params": 3741960,
+    "frozen_params": 303129600
+  },
+  "train_samples": 360,
+  "val_samples": 100,
+  "best_val_mIoU": 55.92,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 2.1804,
+      "val_mIoU": 50.65,
+      "val_per_round_mIoU": [
+        50.65
+      ],
+      "boundary_per_round_mIoU": [
+        28.51
+      ],
+      "active_window_per_round_mIoU": [],
+      "avg_val_latency_ms": 85.22,
+      "val_mF1": 66.41,
+      "val_OA": 66.27,
+      "per_class_IoU": {
+        "bareland": 43.84,
+        "rangeland": 46.88,
+        "developed_space": 36.39,
+        "road": 35.9,
+        "tree": 47.59,
+        "water": 62.17,
+        "agriculture_land": 71.74,
+        "building": 60.72
+      },
+      "elapsed_sec": 82.8
+    },
+    {
+      "epoch": 2,
+      "train_loss": 1.6405,
+      "val_mIoU": 53.62,
+      "val_per_round_mIoU": [
+        53.62
+      ],
+      "boundary_per_round_mIoU": [
+        30.16
+      ],
+      "active_window_per_round_mIoU": [],
+      "avg_val_latency_ms": 86.12,
+      "val_mF1": 68.98,
+      "val_OA": 68.53,
+      "per_class_IoU": {
+        "bareland": 54.14,
+        "rangeland": 45.69,
+        "developed_space": 40.34,
+        "road": 34.45,
+        "tree": 53.49,
+        "water": 66.06,
+        "agriculture_land": 72.19,
+        "building": 62.62
+      },
+      "elapsed_sec": 166.3
+    },
+    {
+      "epoch": 3,
+      "train_loss": 1.5364,
+      "val_mIoU": 55.47,
+      "val_per_round_mIoU": [
+        55.47
+      ],
+      "boundary_per_round_mIoU": [
+        30.21
+      ],
+      "active_window_per_round_mIoU": [],
+      "avg_val_latency_ms": 86.08,
+      "val_mF1": 70.64,
+      "val_OA": 69.82,
+      "per_class_IoU": {
+        "bareland": 54.74,
+        "rangeland": 50.18,
+        "developed_space": 39.4,
+        "road": 39.99,
+        "tree": 54.71,
+        "water": 67.57,
+        "agriculture_land": 73.76,
+        "building": 63.39
+      },
+      "elapsed_sec": 248.2
+    },
+    {
+      "epoch": 4,
+      "train_loss": 1.4371,
+      "val_mIoU": 55.92,
+      "val_per_round_mIoU": [
+        55.92
+      ],
+      "boundary_per_round_mIoU": [
+        31.43
+      ],
+      "active_window_per_round_mIoU": [],
+      "avg_val_latency_ms": 87.83,
+      "val_mF1": 71.02,
+      "val_OA": 70.29,
+      "per_class_IoU": {
+        "bareland": 55.89,
+        "rangeland": 49.93,
+        "developed_space": 41.46,
+        "road": 39.31,
+        "tree": 54.48,
+        "water": 67.98,
+        "agriculture_land": 74.52,
+        "building": 63.8
+      },
+      "elapsed_sec": 328.8
+    }
+  ],
+  "full_val": {
+    "final": {
+      "mIoU": 54.73,
+      "mF1": 69.82,
+      "OA": 70.31,
+      "per_class_IoU": {
+        "bareland": 40.57,
+        "rangeland": 47.13,
+        "developed_space": 41.0,
+        "road": 41.6,
+        "tree": 58.54,
+        "water": 70.9,
+        "agriculture_land": 75.39,
+        "building": 62.74
+      }
+    },
+    "per_round_mIoU": [
+      54.73
+    ],
+    "boundary_per_round_mIoU": [
+      30.1
+    ],
+    "active_window_per_round_mIoU": [],
+    "avg_val_latency_ms": 86.18,
+    "per_round": [
+      {
+        "mIoU": 54.73,
+        "mF1": 69.82,
+        "OA": 70.31,
+        "per_class_IoU": {
+          "bareland": 40.57,
+          "rangeland": 47.13,
+          "developed_space": 41.0,
+          "road": 41.6,
+          "tree": 58.54,
+          "water": 70.9,
+          "agriculture_land": 75.39,
+          "building": 62.74
+        }
+      }
+    ]
+  }
+}
