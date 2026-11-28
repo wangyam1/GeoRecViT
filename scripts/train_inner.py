@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--batch_size", type=int, default=None)
     p.add_argument("--lr", type=float, default=None)
-    p.add_argument("--max_samples", type=int, default=None)
+    p.add_argument("--max_samples", "--max_train_samples", dest="max_samples", type=int, default=None)
     p.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()

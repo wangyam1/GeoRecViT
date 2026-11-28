@@ -1,0 +1,226 @@
+{
+  "dataset": "loveda",
+  "params": {
+    "total_params": 1154852187,
+    "trainable_params": 11212837,
+    "frozen_params": 1143639350
+  },
+  "sweeps": [
+    {
+      "top_m_windows": 1,
+      "active_window_ratio": 0.111,
+      "avg_latency_ms_at_max_R": 2165.51,
+      "by_round": {
+        "R=1": {
+          "mIoU": 47.18,
+          "mF1": 62.54,
+          "OA": 66.61,
+          "per_class_IoU": {
+            "background": 44.4,
+            "building": 58.4,
+            "road": 60.68,
+            "water": 55.14,
+            "barren": 18.05,
+            "forest": 33.76,
+            "agricultural": 59.8
+          }
+        },
+        "R=2": {
+          "mIoU": 47.35,
+          "mF1": 62.8,
+          "OA": 66.57,
+          "per_class_IoU": {
+            "background": 44.23,
+            "building": 58.46,
+            "road": 60.54,
+            "water": 55.14,
+            "barren": 19.17,
+            "forest": 34.36,
+            "agricultural": 59.55
+          }
+        },
+        "R=3": {
+          "mIoU": 47.46,
+          "mF1": 62.97,
+          "OA": 66.51,
+          "per_class_IoU": {
+            "background": 44.05,
+            "building": 58.48,
+            "road": 60.4,
+            "water": 55.13,
+            "barren": 19.97,
+            "forest": 34.84,
+            "agricultural": 59.33
+          }
+        }
+      },
+      "active_window_by_round_mIoU": {
+        "R=1": 41.73,
+        "R=2": 42.43,
+        "R=3": 42.74
+      }
+    },
+    {
+      "top_m_windows": 3,
+      "active_window_ratio": 0.333,
+      "avg_latency_ms_at_max_R": 2225.45,
+      "by_round": {
+        "R=1": {
+          "mIoU": 47.18,
+          "mF1": 62.54,
+          "OA": 66.61,
+          "per_class_IoU": {
+            "background": 44.4,
+            "building": 58.4,
+            "road": 60.68,
+            "water": 55.14,
+            "barren": 18.05,
+            "forest": 33.76,
+            "agricultural": 59.8
+          }
+        },
+        "R=2": {
+          "mIoU": 47.41,
+          "mF1": 62.94,
+          "OA": 66.48,
+          "per_class_IoU": {
+            "background": 43.94,
+            "building": 58.56,
+            "road": 59.94,
+            "water": 54.9,
+            "barren": 20.04,
+            "forest": 35.06,
+            "agricultural": 59.41
+          }
+        },
+        "R=3": {
+          "mIoU": 47.51,
+          "mF1": 63.18,
+          "OA": 66.3,
+          "per_class_IoU": {
+            "background": 43.45,
+            "building": 58.67,
+            "road": 59.1,
+            "water": 54.67,
+            "barren": 21.55,
+            "forest": 36.05,
+            "agricultural": 59.05
+          }
+        }
+      },
+      "active_window_by_round_mIoU": {
+        "R=1": 44.07,
+        "R=2": 44.39,
+        "R=3": 44.4
+      }
+    },
+    {
+      "top_m_windows": 5,
+      "active_window_ratio": 0.556,
+      "avg_latency_ms_at_max_R": 2314.86,
+      "by_round": {
+        "R=1": {
+          "mIoU": 47.18,
+          "mF1": 62.54,
+          "OA": 66.61,
+          "per_class_IoU": {
+            "background": 44.4,
+            "building": 58.4,
+            "road": 60.68,
+            "water": 55.14,
+            "barren": 18.05,
+            "forest": 33.76,
+            "agricultural": 59.8
+          }
+        },
+        "R=2": {
+          "mIoU": 47.46,
+          "mF1": 63.05,
+          "OA": 66.43,
+          "per_class_IoU": {
+            "background": 43.74,
+            "building": 58.6,
+            "road": 59.52,
+            "water": 54.85,
+            "barren": 20.66,
+            "forest": 35.49,
+            "agricultural": 59.35
+          }
+        },
+        "R=3": {
+          "mIoU": 47.57,
+          "mF1": 63.33,
+          "OA": 66.19,
+          "per_class_IoU": {
+            "background": 43.02,
+            "building": 58.74,
+            "road": 58.11,
+            "water": 54.54,
+            "barren": 22.69,
+            "forest": 36.93,
+            "agricultural": 58.92
+          }
+        }
+      },
+      "active_window_by_round_mIoU": {
+        "R=1": 44.68,
+        "R=2": 45.0,
+        "R=3": 45.04
+      }
+    },
+    {
+      "top_m_windows": 9,
+      "active_window_ratio": 1.0,
+      "avg_latency_ms_at_max_R": 2491.06,
+      "by_round": {
+        "R=1": {
+          "mIoU": 47.18,
+          "mF1": 62.54,
+          "OA": 66.61,
+          "per_class_IoU": {
+            "background": 44.4,
+            "building": 58.4,
+            "road": 60.68,
+            "water": 55.14,
+            "barren": 18.05,
+            "forest": 33.76,
+            "agricultural": 59.8
+          }
+        },
+        "R=2": {
+          "mIoU": 47.6,
+          "mF1": 63.33,
+          "OA": 66.35,
+          "per_class_IoU": {
+            "background": 43.32,
+            "building": 58.86,
+            "road": 58.29,
+            "water": 54.45,
+            "barren": 22.26,
+            "forest": 36.74,
+            "agricultural": 59.28
+          }
+        },
+        "R=3": {
+          "mIoU": 47.68,
+          "mF1": 63.69,
+          "OA": 65.96,
+          "per_class_IoU": {
+            "background": 42.09,
+            "building": 59.18,
+            "road": 55.02,
+            "water": 53.85,
+            "barren": 25.67,
+            "forest": 39.27,
+            "agricultural": 58.72
+          }
+        }
+      },
+      "active_window_by_round_mIoU": {
+        "R=1": 47.18,
+        "R=2": 47.6,
+        "R=3": 47.68
+      }
+    }
+  ]
+}

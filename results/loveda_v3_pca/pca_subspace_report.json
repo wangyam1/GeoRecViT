@@ -1,0 +1,57 @@
+{
+  "dataset": "loveda",
+  "num_stat_images": 20,
+  "num_tokens_analyzed": 6480,
+  "panel_layout_2x4": [
+    "row0_col0: Input Satellite RGB",
+    "row0_col1: Ground Truth Mask",
+    "row0_col2: PCA-RGB Frozen SAM 3 PE-ViT F_pe^(24)",
+    "row0_col3: PCA-RGB Frozen DINOv3-SAT-493M F_sat",
+    "row1_col0: PCA-RGB Stage-1 Aligned Manifold (PE-ViT + OuterLink + InnerLink)",
+    "row1_col1: STE Hybrid Uncertainty + Top-M Routed Windows",
+    "row1_col2: GeoRecViT Round-1 Prediction",
+    "row1_col3: GeoRecViT Round-3 Prediction"
+  ],
+  "pca_spectrum": {
+    "sam3_pe_vit_mid": {
+      "top3_cum_var": 0.5311,
+      "top16_cum_var": 0.7165,
+      "top32_cum_var": 0.7934,
+      "top64_cum_var": 0.8519,
+      "effective_rank_top64": 10.69
+    },
+    "dinov3_sat_raw": {
+      "top3_cum_var": 0.2464,
+      "top16_cum_var": 0.5089,
+      "top32_cum_var": 0.6315,
+      "top64_cum_var": 0.7489,
+      "effective_rank_top64": 34.06
+    },
+    "dinov3_sat_outer_projected": {
+      "top3_cum_var": 0.5981,
+      "top16_cum_var": 0.8808,
+      "top32_cum_var": 0.9344,
+      "top64_cum_var": 0.9628,
+      "effective_rank_top64": 11.57
+    },
+    "georecvit_aligned_manifold": {
+      "top3_cum_var": 0.2053,
+      "top16_cum_var": 0.5031,
+      "top32_cum_var": 0.6354,
+      "top64_cum_var": 0.7371,
+      "effective_rank_top64": 35.56
+    }
+  },
+  "cross_expert_subspace_alignment": {
+    "mean_cosine_raw_pe_vs_sat": 0.0079,
+    "mean_cosine_pe_vs_outer_projected_sat": 0.1808,
+    "mean_cosine_pe_vs_inner_aligned": 0.8958,
+    "top16_grassmann_overlap_raw_pe_vs_sat": 0.0134,
+    "top16_grassmann_overlap_pe_vs_outer_projected_sat": 0.3117,
+    "top16_grassmann_overlap_pe_vs_inner_aligned": 0.9011
+  },
+  "recursive_logit_shift_l2": {
+    "mean_shift_inside_active_windows": 0.61808,
+    "mean_shift_outside_active_windows": 0.0
+  }
+}
